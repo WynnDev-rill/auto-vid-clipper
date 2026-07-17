@@ -49,7 +49,7 @@ export const updateClip = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     const { error } = await context.supabase
       .from("clips")
-      .update(data.patch)
+      .update(data.patch as never)
       .eq("id", data.clipId);
     if (error) throw new Error(error.message);
     return { ok: true };

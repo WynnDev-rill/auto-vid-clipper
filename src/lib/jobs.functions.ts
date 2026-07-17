@@ -136,12 +136,10 @@ export const pollJob = createServerFn({ method: "POST" })
     const nextStage = STAGES[stepIndex];
     const nextProgress = Math.min(100, Math.floor((stepIndex / (STAGES.length - 1)) * 100));
 
-    const patch: Record<string, unknown> = {
-      status: nextStage,
-      stage: nextStage,
-      progress: nextProgress,
-    };
-    await supabase.from("jobs").update(patch).eq("id", job.id);
+    await supabase
+      .from("jobs")
+      .update({ status: nextStage, stage: nextStage, progress: nextProgress })
+      .eq("id", job.id);
 
     // On done, create mock clips
     if (nextStage === "done") {
