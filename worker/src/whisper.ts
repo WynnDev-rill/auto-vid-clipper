@@ -8,21 +8,28 @@ export type Transcript = { text: string; words: Word[]; segments: Segment[] };
 let client: OpenAI | null = null;
 function openai() {
   if (!client) {
-    const key = process.env.OPENAI_API_KEY;
-    if (!key) throw new Error("OPENAI_API_KEY is not set");
-    client = new OpenAI({ apiKey: key });
+    const key = process.env.OPENROUTER_API_KEY ?? process.env.OPENAI_API_KEY;
+    if (!key) throw new Error("OPENROUTER_API_KEY is not set");
+    client = new OpenAI({
+      apiKey: key,
+      baseURL: process.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1",
+      defaultHeaders: {
+        "HTTP-Referer": process.env.OPENROUTER_REFERER ?? "https://clipforge.ai",
+        "X-Title": process.env.OPENROUTER_TITLE ?? "ClipForge AI Worker",
+      },
+    });
   }
   return client;
 }
 
 export async function transcribe(audioPath: string): Promise<Transcript> {
+  const model = process.env.OPENROUTER_WHISPER_MODEL ?? "openai/whisper-1";
   const res = await openai().audio.transcriptions.create({
     file: fs.createReadStream(audioPath),
-    model: "whisper-1",
+    model,
     response_format: "verbose_json",
     timestamp_granularities: ["word", "segment"],
   });
-  // The SDK returns a loose shape for verbose_json; normalize it.
   const raw = res as unknown as {
     text: string;
     words?: Array<{ word: string; start: number; end: number }>;
