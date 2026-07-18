@@ -107,26 +107,54 @@ export const pollJob = createServerFn({ method: "POST" })
     const { getBackendConfig, fetchBackendJob } = await import("./backend.server");
     const cfg = getBackendConfig();
 
-    if (cfg.configured && job.backend_job_id) {
+    if (cfg.configured) {
+      if (!job.backend_job_id) {
+        await supabase
+          .from("jobs")
+          .update({ status: "failed", stage: "failed", error_message: "Backend dispatch failed" })
+          .eq("id", job.id);
+        const { data: updated } = await supabase.from("jobs").select("*").eq("id", job.id).maybeSingle();
+        return { job: updated };
+      }
       const remote = await fetchBackendJob(job.backend_job_id);
       if (remote) {
         await supabase
           .from("jobs")
-          .update({ status: remote.status, progress: remote.progress, stage: remote.status })
+          .update({
+            status: remote.status,
+            progress: remote.progress,
+            stage: remote.status,
+            error_message: remote.error ?? null,
+          })
           .eq("id", job.id);
         if (remote.status === "done" && remote.clips?.length) {
-          const rows = remote.clips.map((c) => ({
-            job_id: job.id,
-            user_id: userId,
-            video_url: c.video_url,
-            thumbnail_url: c.thumbnail_url,
-            duration_s: c.duration_s,
-            order_index: c.order,
-          }));
-          await supabase.from("clips").insert(rows);
+          const { count } = await supabase
+            .from("clips")
+            .select("id", { count: "exact", head: true })
+            .eq("job_id", job.id);
+          if (!count) {
+            const rows = remote.clips.map((c) => ({
+              job_id: job.id,
+              user_id: userId,
+              video_url: c.video_url,
+              thumbnail_url: c.thumbnail_url,
+              duration_s: c.duration_s,
+              order_index: c.order,
+              status: "draft" as const,
+              title: `${job.source_title ?? "Clip"} · Highlight ${c.order + 1}`,
+              description: c.transcript ?? "",
+              subtitle_template: "modern",
+              subtitle_style: {},
+              hashtags: ["#shorts", "#viral", "#clipforge"],
+              tags: ["shorts", "clips"],
+            }));
+            await supabase.from("clips").insert(rows);
+          }
         }
-        return { job: { ...job, ...remote } };
+        const { data: updated } = await supabase.from("jobs").select("*").eq("id", job.id).maybeSingle();
+        return { job: updated };
       }
+      return { job };
     }
 
     // Mock progression: advance stage every poll
