@@ -6,6 +6,7 @@ const StartJobSchema = z
   .object({
     sourceType: z.enum(["youtube_url", "upload"]),
     sourceUrl: z.string().min(1).max(2048).optional(),
+    sourceUploadPath: z.string().min(1).max(1024).optional(),
     sourceTitle: z.string().min(1).max(200).optional(),
     clipDuration: z.number().int().min(5).max(180),
     clipCount: z.number().int().min(1).max(20),
@@ -32,6 +33,12 @@ const StartJobSchema = z
       } catch {
         ctx.addIssue({ code: "custom", path: ["sourceUrl"], message: "Enter a valid YouTube URL" });
       }
+    } else if (!value.sourceUploadPath) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["sourceUploadPath"],
+        message: "Upload a video first",
+      });
     }
   });
 
@@ -41,12 +48,36 @@ export const startJob = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     const { supabase, userId } = context;
 
+    let processingUrl = data.sourceUrl;
+    if (data.sourceType === "upload") {
+      const uploadPath = data.sourceUploadPath!;
+      if (!uploadPath.startsWith(`${userId}/`) || uploadPath.includes("..")) {
+        throw new Error("Invalid uploaded video path");
+      }
+
+      const fileName = uploadPath.slice(uploadPath.lastIndexOf("/") + 1);
+      const { data: files, error: listError } = await supabase.storage
+        .from("source-videos")
+        .list(userId, { search: fileName, limit: 2 });
+      if (listError) throw new Error(`Could not verify uploaded video: ${listError.message}`);
+      if (!files?.some((file) => file.name === fileName)) {
+        throw new Error("The video upload did not complete. Please select the file again.");
+      }
+
+      const { data: signed, error: signError } = await supabase.storage
+        .from("source-videos")
+        .createSignedUrl(uploadPath, 24 * 60 * 60);
+      if (signError) throw new Error(`Could not read uploaded video: ${signError.message}`);
+      processingUrl = signed.signedUrl;
+    }
+
     const { data: job, error } = await supabase
       .from("jobs")
       .insert({
         user_id: userId,
         source_type: data.sourceType,
-        source_url: data.sourceUrl ?? null,
+        source_url: data.sourceType === "youtube_url" ? data.sourceUrl : null,
+        source_upload_path: data.sourceUploadPath ?? null,
         source_title: data.sourceTitle ?? "Untitled video",
         clip_duration: data.clipDuration,
         clip_count: data.clipCount,
@@ -65,7 +96,7 @@ export const startJob = createServerFn({ method: "POST" })
       const cfg = getBackendConfig();
       if (cfg.configured) {
         const backend = await createBackendJob({
-          sourceUrl: data.sourceUrl,
+          sourceUrl: processingUrl,
           clipDuration: data.clipDuration,
           clipCount: data.clipCount,
           userId,
@@ -223,8 +254,16 @@ export const duplicateJob = createServerFn({ method: "POST" })
     try {
       const { createBackendJob, getBackendConfig } = await import("./backend.server");
       if (getBackendConfig().configured) {
+        let processingUrl = source.source_url ?? undefined;
+        if (source.source_type === "upload" && source.source_upload_path) {
+          const { data: signed, error: signError } = await context.supabase.storage
+            .from("source-videos")
+            .createSignedUrl(source.source_upload_path, 24 * 60 * 60);
+          if (signError) throw new Error(`Could not read uploaded video: ${signError.message}`);
+          processingUrl = signed.signedUrl;
+        }
         const backend = await createBackendJob({
-          sourceUrl: source.source_url ?? undefined,
+          sourceUrl: processingUrl,
           clipDuration: source.clip_duration,
           clipCount: source.clip_count,
           userId: context.userId,
