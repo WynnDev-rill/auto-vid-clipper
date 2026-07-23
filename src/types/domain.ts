@@ -1,4 +1,12 @@
-export type JobStatus = "queued" | "transcribing" | "analyzing" | "rendering" | "done" | "failed";
+export type JobStatus =
+  | "queued"
+  | "transcribing"
+  | "analyzing"
+  | "rendering"
+  | "cancel_requested"
+  | "cancelled"
+  | "done"
+  | "failed";
 
 export type SubtitleTemplate = "modern" | "minimal" | "tiktok" | "shorts" | "hormozi";
 
@@ -32,13 +40,24 @@ export const SUBTITLE_TEMPLATES: Array<{
     id: "modern",
     name: "Modern",
     description: "Clean, bold, centered",
-    style: { ...DEFAULT_SUBTITLE_STYLE, fontSize: 34, position: "middle", highlightColor: "#a855f7" },
+    style: {
+      ...DEFAULT_SUBTITLE_STYLE,
+      fontSize: 34,
+      position: "middle",
+      highlightColor: "#a855f7",
+    },
   },
   {
     id: "minimal",
     name: "Minimal",
     description: "Thin, no highlight",
-    style: { ...DEFAULT_SUBTITLE_STYLE, fontSize: 28, strokeWidth: 1, highlightColor: "#ffffff", emojis: false },
+    style: {
+      ...DEFAULT_SUBTITLE_STYLE,
+      fontSize: 28,
+      strokeWidth: 1,
+      highlightColor: "#ffffff",
+      emojis: false,
+    },
   },
   {
     id: "tiktok",
@@ -60,5 +79,7 @@ export const SUBTITLE_TEMPLATES: Array<{
   },
 ];
 
-export const CLIP_DURATIONS = [15, 30, 45, 60] as const;
-export type ClipDuration = (typeof CLIP_DURATIONS)[number];
+export const CLIP_DURATION_MIN = 5;
+export const CLIP_DURATION_MAX = 180;
+export const CLIP_DURATION_PRESETS = [15, 30, 45, 60] as const;
+export type ClipDuration = number;

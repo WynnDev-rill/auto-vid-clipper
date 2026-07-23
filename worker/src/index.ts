@@ -5,7 +5,7 @@ import express from "express";
 import { nanoid } from "nanoid";
 import { z } from "zod";
 import { runPipeline } from "./pipeline.js";
-import { createJob, getJob } from "./store.js";
+import { createJob, getJob, requestCancellation } from "./store.js";
 
 const app = express();
 app.use(cors());
@@ -59,15 +59,33 @@ app.get("/jobs/:id", requireAuth, (req, res) => {
     progress: job.progress,
     clips: job.clips,
     error: job.error,
+    startedAt: job.startedAt,
+    updatedAt: job.updatedAt,
+    stageStartedAt: job.stageStartedAt,
+    sourceDurationS: job.sourceDurationS,
+    completedClips: job.completedClips,
+    totalClips: job.clipCount,
+    estimatedRemainingS: job.estimatedRemainingS,
   });
+});
+
+app.post("/jobs/:id/cancel", requireAuth, (req, res) => {
+  const job = getJob(req.params.id);
+  if (!job) return res.status(404).json({ error: "not found" });
+  if (!requestCancellation(job.id))
+    return res.status(409).json({ error: "job cannot be cancelled" });
+  res.json({ ok: true });
 });
 
 // Serve rendered artifacts. Public on purpose — video_url/thumbnail_url are
 // consumed directly by browsers and YouTube's upload fetcher.
-app.use("/media", express.static(path.resolve(WORK_DIR), {
-  fallthrough: false,
-  maxAge: "1h",
-}));
+app.use(
+  "/media",
+  express.static(path.resolve(WORK_DIR), {
+    fallthrough: false,
+    maxAge: "1h",
+  }),
+);
 
 app.listen(PORT, () => {
   console.log(`[clipforge-worker] listening on :${PORT}`);

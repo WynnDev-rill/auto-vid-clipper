@@ -55,7 +55,8 @@ Once deployed, set two env vars on the Lovable app:
 
 ## Notes
 
-- Job state is in-memory. For multi-instance deployments, swap `store.ts` for
-  Redis or Postgres.
+- Job state is persisted atomically in `$WORK_DIR/jobs.json`, so a single worker
+  can recover status after a restart. Multi-instance deployments should use a
+  shared Redis or Postgres store instead.
 - Rendered clips live on the worker's disk under `$WORK_DIR/<jobId>/`. Clean
   them up on a cron or move to S3/R2 if you need durable storage.

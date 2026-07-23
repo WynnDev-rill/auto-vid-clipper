@@ -1,14 +1,23 @@
-import { createFileRoute, Link, useParams } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate, useParams } from "@tanstack/react-router";
 import { queryOptions, useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { motion } from "framer-motion";
-import { Sparkles, Loader2, ChevronRight, Wand2, Type } from "lucide-react";
+import {
+  Sparkles,
+  Loader2,
+  ChevronRight,
+  Wand2,
+  Type,
+  XCircle,
+  RotateCcw,
+  ListTodo,
+} from "lucide-react";
 import { toast } from "sonner";
 import { useEffect, useState } from "react";
 import { GradientCard } from "@/components/gradient-card";
 import { GradientProgress } from "@/components/gradient-progress";
 import { SubtitlePreview } from "@/components/subtitle-preview";
-import { getJob, pollJob } from "@/lib/jobs.functions";
+import { cancelJob, duplicateJob, getJob, pollJob } from "@/lib/jobs.functions";
 import { updateClip, generateMetadata } from "@/lib/clips.functions";
 import { SUBTITLE_TEMPLATES, DEFAULT_SUBTITLE_STYLE, type SubtitleTemplate } from "@/types/domain";
 
@@ -19,11 +28,14 @@ export const Route = createFileRoute("/_authenticated/clips/$jobId")({
 
 function ClipEditor() {
   const { jobId } = useParams({ from: "/_authenticated/clips/$jobId" });
+  const navigate = useNavigate();
   const qc = useQueryClient();
   const getJobFn = useServerFn(getJob);
   const pollFn = useServerFn(pollJob);
   const updateClipFn = useServerFn(updateClip);
   const genMetaFn = useServerFn(generateMetadata);
+  const cancelFn = useServerFn(cancelJob);
+  const duplicateFn = useServerFn(duplicateJob);
 
   const qo = queryOptions({
     queryKey: ["job", jobId],
@@ -39,9 +51,11 @@ function ClipEditor() {
 
   // Auto-poll to advance state (mock mode)
   useEffect(() => {
-    if (!job || job.status === "done" || job.status === "failed") return;
+    if (!job || ["done", "failed", "cancelled"].includes(job.status)) return;
     const t = setInterval(() => {
-      pollFn({ data: { jobId } }).then(() => qc.invalidateQueries({ queryKey: ["job", jobId] }));
+      pollFn({ data: { jobId } })
+        .then(() => qc.invalidateQueries({ queryKey: ["job", jobId] }))
+        .catch((err) => console.error("[job poll]", err));
     }, 2500);
     return () => clearInterval(t);
   }, [job, jobId, pollFn, qc]);
@@ -68,10 +82,82 @@ function ClipEditor() {
     onError: (err) => toast.error(err instanceof Error ? err.message : "AI failed"),
   });
 
-  if (!job) {
+  const cancel = useMutation({
+    mutationFn: () => cancelFn({ data: { jobId } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["job", jobId] }),
+    onError: (err) => toast.error(err instanceof Error ? err.message : "Could not cancel job"),
+  });
+  const duplicate = useMutation({
+    mutationFn: () => duplicateFn({ data: { jobId } }),
+    onSuccess: (result) => navigate({ to: "/clips/$jobId", params: { jobId: result.jobId } }),
+    onError: (err) => toast.error(err instanceof Error ? err.message : "Could not retry job"),
+  });
+
+  if (q.isPending) {
     return (
       <div className="grid place-items-center py-20">
         <Loader2 className="animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (q.isError || !job) {
+    return (
+      <GradientCard>
+        <p className="text-sm text-destructive">
+          {q.isError ? "Could not load this job." : "Job not found."}
+        </p>
+        <div className="mt-4 flex gap-3">
+          <button
+            onClick={() => q.refetch()}
+            className="rounded-full bg-gradient-brand px-4 py-2 text-xs font-semibold text-primary-foreground"
+          >
+            Try again
+          </button>
+          <Link to="/jobs" className="rounded-full border border-border px-4 py-2 text-xs">
+            All jobs
+          </Link>
+        </div>
+      </GradientCard>
+    );
+  }
+
+  if (job.status === "failed" || job.status === "cancelled") {
+    return (
+      <div className="space-y-5">
+        <div>
+          <p className="text-xs uppercase tracking-wide text-muted-foreground">{job.status}</p>
+          <h1 className="font-display text-2xl font-semibold">{job.source_title ?? "Clip job"}</h1>
+        </div>
+        <GradientCard>
+          <XCircle className="text-destructive" />
+          <p className="mt-3 font-semibold">
+            {job.status === "cancelled"
+              ? "This job was cancelled."
+              : "Generation could not finish."}
+          </p>
+          <p className="mt-2 text-sm text-muted-foreground">
+            {job.error_message ?? "Retry the job or adjust its settings."}
+          </p>
+          <div className="mt-5 flex flex-wrap gap-2">
+            <button
+              onClick={() => duplicate.mutate()}
+              disabled={duplicate.isPending}
+              className="inline-flex items-center gap-2 rounded-full bg-gradient-brand px-4 py-2 text-xs font-semibold text-primary-foreground"
+            >
+              <RotateCcw size={14} /> Retry with same settings
+            </button>
+            <Link to="/create" className="rounded-full border border-border px-4 py-2 text-xs">
+              Adjust settings
+            </Link>
+            <Link
+              to="/jobs"
+              className="inline-flex items-center gap-2 rounded-full border border-border px-4 py-2 text-xs"
+            >
+              <ListTodo size={14} /> All jobs
+            </Link>
+          </div>
+        </GradientCard>
       </div>
     );
   }
@@ -83,21 +169,44 @@ function ClipEditor() {
       <div className="space-y-5">
         <div>
           <p className="text-xs uppercase tracking-wide text-muted-foreground">Generating</p>
-          <h1 className="font-display text-2xl font-semibold md:text-3xl">{job.source_title ?? "Your clips"}</h1>
+          <h1 className="font-display text-2xl font-semibold md:text-3xl">
+            {job.source_title ?? "Your clips"}
+          </h1>
         </div>
         <GradientCard glow>
-          <p className="text-sm capitalize text-muted-foreground">Stage: {job.stage ?? job.status}</p>
-          <p className="mt-2 font-display text-4xl font-bold text-gradient-brand">{job.progress}%</p>
+          <p className="text-sm capitalize text-muted-foreground">
+            Stage: {job.stage ?? job.status}
+          </p>
+          <p className="mt-2 font-display text-4xl font-bold text-gradient-brand">
+            {job.progress}%
+          </p>
           <div className="mt-4">
             <GradientProgress value={job.progress} />
           </div>
+          <p className="mt-3 text-sm text-brand-cyan">
+            {job.estimated_remaining_s
+              ? `About ${Math.max(1, Math.ceil(job.estimated_remaining_s / 60))} min remaining`
+              : "Calculating time remaining…"}
+          </p>
           <ul className="mt-5 space-y-2 text-sm text-muted-foreground">
-            {["Transcribing audio", "Detecting highlights", "Rendering vertical", "Auto subtitles"].map((s) => (
+            {[
+              "Transcribing audio",
+              "Detecting highlights",
+              "Rendering vertical",
+              "Auto subtitles",
+            ].map((s) => (
               <li key={s} className="flex items-center gap-2">
                 <Sparkles size={12} className="text-brand-purple" /> {s}
               </li>
             ))}
           </ul>
+          <button
+            onClick={() => cancel.mutate()}
+            disabled={cancel.isPending || job.status === "cancel_requested"}
+            className="mt-5 rounded-full border border-destructive/40 bg-destructive/10 px-4 py-2 text-xs text-destructive disabled:opacity-50"
+          >
+            {job.status === "cancel_requested" ? "Cancelling…" : "Cancel job"}
+          </button>
         </GradientCard>
       </div>
     );
@@ -107,8 +216,8 @@ function ClipEditor() {
     (selected?.subtitle_style as Partial<typeof DEFAULT_SUBTITLE_STYLE> | undefined) &&
     Object.keys(selected!.subtitle_style ?? {}).length
       ? { ...DEFAULT_SUBTITLE_STYLE, ...(selected!.subtitle_style as object) }
-      : SUBTITLE_TEMPLATES.find((t) => t.id === (selected?.subtitle_template as SubtitleTemplate))?.style ??
-        DEFAULT_SUBTITLE_STYLE;
+      : (SUBTITLE_TEMPLATES.find((t) => t.id === (selected?.subtitle_template as SubtitleTemplate))
+          ?.style ?? DEFAULT_SUBTITLE_STYLE);
 
   return (
     <div className="space-y-5">
@@ -165,7 +274,11 @@ function ClipEditor() {
                   }`}
                 >
                   <div className="font-semibold">{t.name}</div>
-                  <div className={selected.subtitle_template === t.id ? "opacity-80" : "text-muted-foreground"}>
+                  <div
+                    className={
+                      selected.subtitle_template === t.id ? "opacity-80" : "text-muted-foreground"
+                    }
+                  >
                     {t.description}
                   </div>
                 </button>
