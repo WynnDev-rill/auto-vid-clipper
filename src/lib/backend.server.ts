@@ -4,7 +4,15 @@
 
 export type BackendJob = {
   id: string;
-  status: "queued" | "transcribing" | "analyzing" | "rendering" | "done" | "failed";
+  status:
+    | "queued"
+    | "transcribing"
+    | "analyzing"
+    | "rendering"
+    | "cancel_requested"
+    | "cancelled"
+    | "done"
+    | "failed";
   progress: number;
   clips?: Array<{
     order: number;
@@ -14,6 +22,13 @@ export type BackendJob = {
     transcript?: string;
   }>;
   error?: string;
+  startedAt?: number;
+  updatedAt?: number;
+  stageStartedAt?: number;
+  sourceDurationS?: number;
+  completedClips?: number;
+  totalClips?: number;
+  estimatedRemainingS?: number;
 };
 
 export function getBackendConfig() {
@@ -50,7 +65,21 @@ export async function fetchBackendJob(backendJobId: string): Promise<BackendJob 
   if (!configured || !url) return null;
   const res = await fetch(`${url.replace(/\/$/, "")}/jobs/${backendJobId}`, {
     headers: { ...(secret ? { Authorization: `Bearer ${secret}` } : {}) },
+    signal: AbortSignal.timeout(15_000),
   });
+  if (res.status === 404) return null;
   if (!res.ok) throw new Error(`Backend fetch job failed: ${await res.text()}`);
   return (await res.json()) as BackendJob;
+}
+
+export async function cancelBackendJob(backendJobId: string): Promise<void> {
+  const { url, secret, configured } = getBackendConfig();
+  if (!configured || !url) return;
+  const res = await fetch(`${url.replace(/\/$/, "")}/jobs/${backendJobId}/cancel`, {
+    method: "POST",
+    headers: { ...(secret ? { Authorization: `Bearer ${secret}` } : {}) },
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!res.ok && res.status !== 409)
+    throw new Error(`Backend cancel job failed: ${await res.text()}`);
 }

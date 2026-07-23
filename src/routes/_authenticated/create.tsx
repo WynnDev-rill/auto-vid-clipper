@@ -6,7 +6,7 @@ import { Link as LinkIcon, Upload as UploadIcon, Loader2, Sparkles } from "lucid
 import { toast } from "sonner";
 import { GradientCard } from "@/components/gradient-card";
 import { startJob } from "@/lib/jobs.functions";
-import { CLIP_DURATIONS } from "@/types/domain";
+import { CLIP_DURATION_MAX, CLIP_DURATION_MIN, CLIP_DURATION_PRESETS } from "@/types/domain";
 
 export const Route = createFileRoute("/_authenticated/create")({
   head: () => ({ meta: [{ title: "New clip — ClipForge AI" }] }),
@@ -29,7 +29,8 @@ function Create() {
       return;
     }
     if (tab === "upload") {
-      toast.info("Direct upload is coming — using a placeholder for this demo run.");
+      toast.info("Direct upload is coming soon. Generate clips from a YouTube URL for now.");
+      return;
     }
     setBusy(true);
     try {
@@ -70,11 +71,14 @@ function Create() {
           </button>
           <button
             onClick={() => setTab("upload")}
+            disabled
             className={`flex-1 rounded-full px-3 py-2 text-sm font-medium transition ${
-              tab === "upload" ? "bg-gradient-brand text-primary-foreground" : "text-muted-foreground"
+              tab === "upload"
+                ? "bg-gradient-brand text-primary-foreground"
+                : "text-muted-foreground"
             }`}
           >
-            <UploadIcon size={14} className="mr-1 inline" /> Upload
+            <UploadIcon size={14} className="mr-1 inline" /> Upload · Soon
           </button>
         </div>
 
@@ -111,7 +115,7 @@ function Create() {
       <GradientCard>
         <p className="text-sm font-medium">Clip duration</p>
         <div className="mt-3 grid grid-cols-4 gap-2">
-          {CLIP_DURATIONS.map((d) => (
+          {CLIP_DURATION_PRESETS.map((d) => (
             <button
               key={d}
               onClick={() => setDuration(d)}
@@ -125,6 +129,40 @@ function Create() {
             </button>
           ))}
         </div>
+        <div className="mt-4 flex items-center gap-4">
+          <input
+            aria-label="Clip duration in seconds"
+            type="range"
+            min={CLIP_DURATION_MIN}
+            max={CLIP_DURATION_MAX}
+            step={1}
+            value={duration}
+            onChange={(e) => setDuration(Number(e.target.value))}
+            className="min-w-0 flex-1 accent-[oklch(0.68_0.22_295)]"
+          />
+          <label className="flex items-center gap-1 rounded-xl border border-input bg-input/30 px-2 py-1.5 text-sm">
+            <input
+              aria-label="Custom clip duration"
+              type="number"
+              min={CLIP_DURATION_MIN}
+              max={CLIP_DURATION_MAX}
+              value={duration}
+              onChange={(e) =>
+                setDuration(
+                  Math.min(
+                    CLIP_DURATION_MAX,
+                    Math.max(CLIP_DURATION_MIN, Number(e.target.value) || CLIP_DURATION_MIN),
+                  ),
+                )
+              }
+              className="w-12 bg-transparent text-right font-semibold outline-none"
+            />
+            <span className="text-muted-foreground">sec</span>
+          </label>
+        </div>
+        <p className="mt-2 text-xs text-muted-foreground">
+          Choose any duration from 5 seconds to 3 minutes.
+        </p>
 
         <p className="mt-6 text-sm font-medium">Number of clips</p>
         <div className="mt-3 flex items-center gap-4">
@@ -136,7 +174,9 @@ function Create() {
             onChange={(e) => setCount(Number(e.target.value))}
             className="flex-1 accent-[oklch(0.68_0.22_295)]"
           />
-          <div className="w-10 text-right font-display text-xl font-semibold text-gradient-brand">{count}</div>
+          <div className="w-10 text-right font-display text-xl font-semibold text-gradient-brand">
+            {count}
+          </div>
         </div>
       </GradientCard>
 

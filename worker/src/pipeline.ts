@@ -3,7 +3,7 @@ import path from "node:path";
 import { downloadSource } from "./download.js";
 import { extractAudio, probeDuration, renderClip } from "./ffmpeg.js";
 import { scoreHighlights } from "./highlights.js";
-import { updateJob, type Job } from "./store.js";
+import { throwIfCancelled, updateJob, type Job } from "./store.js";
 import { transcribe } from "./whisper.js";
 
 const WORK_DIR = process.env.WORK_DIR || "./.work";
@@ -16,19 +16,22 @@ export async function runPipeline(job: Job): Promise<void> {
 
   try {
     if (!job.sourceUrl) throw new Error("sourceUrl is required");
+    throwIfCancelled(job.id);
 
     // 1. Download
     updateJob(job.id, { status: "transcribing", progress: 5 });
     const sourceVideo = path.join(jobDir, "source.mp4");
     await downloadSource(job.sourceUrl, sourceVideo);
+    throwIfCancelled(job.id);
     updateJob(job.id, { progress: 20 });
 
     // 2. Whisper
     const audioPath = path.join(jobDir, "audio.wav");
     await extractAudio(sourceVideo, audioPath);
     const transcript = await transcribe(audioPath);
+    throwIfCancelled(job.id);
     const totalDuration = await probeDuration(sourceVideo);
-    updateJob(job.id, { status: "analyzing", progress: 45 });
+    updateJob(job.id, { status: "analyzing", progress: 45, sourceDurationS: totalDuration });
 
     // 3. Highlights
     const highlights = await scoreHighlights({
@@ -37,12 +40,15 @@ export async function runPipeline(job: Job): Promise<void> {
       clipDuration: job.clipDuration,
       count: job.clipCount,
     });
+    throwIfCancelled(job.id);
     if (highlights.length === 0) throw new Error("No highlights produced");
     updateJob(job.id, { status: "rendering", progress: 60 });
 
     // 4. Render each clip
     const clips: Job["clips"] = [];
+    const renderStartedAt = Date.now();
     for (let i = 0; i < highlights.length; i++) {
+      throwIfCancelled(job.id);
       const h = highlights[i];
       const mp4 = path.join(jobDir, `clip-${i}.mp4`);
       const jpg = path.join(jobDir, `clip-${i}.jpg`);
@@ -66,18 +72,38 @@ export async function runPipeline(job: Job): Promise<void> {
         duration_s: Math.round(h.end_s - h.start_s),
         transcript: clipTranscript,
       });
+      const completedClips = i + 1;
+      const averageClipMs = (Date.now() - renderStartedAt) / completedClips;
       updateJob(job.id, {
         progress: 60 + Math.floor(((i + 1) / highlights.length) * 38),
         clips: [...clips],
+        completedClips,
+        estimatedRemainingS: Math.max(
+          0,
+          Math.round((averageClipMs * (highlights.length - completedClips)) / 1000),
+        ),
       });
     }
 
     // 5. Cleanup source + audio (keep rendered clips for serving)
-    try { fs.unlinkSync(sourceVideo); } catch {}
-    try { fs.unlinkSync(audioPath); } catch {}
+    try {
+      fs.unlinkSync(sourceVideo);
+    } catch {}
+    try {
+      fs.unlinkSync(audioPath);
+    } catch {}
 
-    updateJob(job.id, { status: "done", progress: 100, clips });
+    updateJob(job.id, { status: "done", progress: 100, clips, estimatedRemainingS: 0 });
   } catch (err) {
+    if (err instanceof Error && err.name === "JobCancelledError") {
+      updateJob(job.id, {
+        status: "cancelled",
+        progress: 0,
+        error: undefined,
+        estimatedRemainingS: 0,
+      });
+      return;
+    }
     const message = err instanceof Error ? err.message : String(err);
     console.error(`[pipeline] job ${job.id} failed:`, err);
     updateJob(job.id, { status: "failed", error: message });
