@@ -23,8 +23,24 @@ function SettingsPage() {
   const sFn = useServerFn(getSettings);
   const upFn = useServerFn(updateSettings);
 
-  const yt = useQuery({ queryKey: ["yt-connection"], queryFn: () => ytFn() });
+  const yt = useQuery({ queryKey: ["yt-connection"], queryFn: () => ytFn(), refetchOnWindowFocus: false });
   const settings = useQuery({ queryKey: ["settings"], queryFn: () => sFn() });
+
+  // Handle OAuth callback redirect: ?yt_connected=1 or ?yt_error=...
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const connected = params.get("yt_connected");
+    const err = params.get("yt_error");
+    if (connected) {
+      toast.success("YouTube connected");
+      qc.invalidateQueries({ queryKey: ["yt-connection"] });
+      qc.invalidateQueries({ queryKey: ["diagnostics"] });
+      window.history.replaceState({}, "", window.location.pathname);
+    } else if (err) {
+      toast.error(`YouTube connect failed: ${err}`);
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+  }, [qc]);
 
   const connect = useMutation({
     mutationFn: () => startFn({ data: { origin: window.location.origin } }),
