@@ -121,8 +121,8 @@ function SettingsPage() {
               <>
                 <p className="mt-1 text-sm text-muted-foreground">
                   {yt.data.oauthConfigured
-                    ? "Connect to enable direct uploads."
-                    : "Setup needed — Google OAuth credentials not configured. Uploads run in simulation mode."}
+                    ? "Connect your Google account to enable real uploads to your YouTube channel."
+                    : "Google OAuth credentials not configured on the server. Ask an admin to set GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET."}
                 </p>
                 <button
                   onClick={() => connect.mutate()}
