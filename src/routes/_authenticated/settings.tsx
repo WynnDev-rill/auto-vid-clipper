@@ -1,7 +1,8 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
+import { useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { Youtube, LogOut, Bell, Sparkles, Loader2, PlugZap } from "lucide-react";
+import { Youtube, LogOut, Bell, Sparkles, Loader2, PlugZap, Activity } from "lucide-react";
 import { toast } from "sonner";
 import { GradientCard } from "@/components/gradient-card";
 import { getYouTubeConnection, startYouTubeConnect, disconnectYouTube } from "@/lib/youtube.functions";
