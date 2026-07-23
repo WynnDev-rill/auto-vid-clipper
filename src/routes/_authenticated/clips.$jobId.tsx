@@ -39,26 +39,22 @@ function ClipEditor() {
 
   const qo = queryOptions({
     queryKey: ["job", jobId],
-    queryFn: () => getJobFn({ data: { jobId } }),
+    queryFn: async () => {
+      const snapshot = await getJobFn({ data: { jobId } });
+      if (snapshot.job && !["done", "failed", "cancelled"].includes(snapshot.job.status)) {
+        await pollFn({ data: { jobId } });
+        return getJobFn({ data: { jobId } });
+      }
+      return snapshot;
+    },
     refetchInterval: (q) => {
       const s = q.state.data?.job?.status;
-      return s && s !== "done" && s !== "failed" ? 2000 : false;
+      return s && !["done", "failed", "cancelled"].includes(s) ? 2000 : false;
     },
   });
   const q = useQuery(qo);
   const job = q.data?.job;
   const clips = q.data?.clips ?? [];
-
-  // Auto-poll to advance state (mock mode)
-  useEffect(() => {
-    if (!job || ["done", "failed", "cancelled"].includes(job.status)) return;
-    const t = setInterval(() => {
-      pollFn({ data: { jobId } })
-        .then(() => qc.invalidateQueries({ queryKey: ["job", jobId] }))
-        .catch((err) => console.error("[job poll]", err));
-    }, 2500);
-    return () => clearInterval(t);
-  }, [job, jobId, pollFn, qc]);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selected = clips.find((c) => c.id === selectedId) ?? clips[0];

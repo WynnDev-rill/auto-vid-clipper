@@ -97,6 +97,7 @@ export type Database = {
           source_duration_s: number | null
           source_title: string | null
           source_type: string
+          source_upload_path: string | null
           source_url: string | null
           stage: string | null
           stage_started_at: string | null
@@ -119,6 +120,7 @@ export type Database = {
           source_duration_s?: number | null
           source_title?: string | null
           source_type: string
+          source_upload_path?: string | null
           source_url?: string | null
           stage?: string | null
           stage_started_at?: string | null
@@ -141,6 +143,7 @@ export type Database = {
           source_duration_s?: number | null
           source_title?: string | null
           source_type?: string
+          source_upload_path?: string | null
           source_url?: string | null
           stage?: string | null
           stage_started_at?: string | null
