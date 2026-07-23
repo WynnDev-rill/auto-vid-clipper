@@ -76,15 +76,19 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       {
         name: "description",
         content:
-          "ClipForge AI turns your long videos into vertical shorts and uploads them to YouTube — automatic highlights, subtitles, thumbnails, and metadata.",
+          "Automatically generate vertical short clips from your long videos and upload them to YouTube. AI highlights, subtitles, and metadata built in.",
       },
       { property: "og:title", content: "ClipForge AI — Turn long videos into viral shorts" },
       {
         property: "og:description",
-        content: "AI-powered short-clip generation and direct YouTube publishing for creators.",
+        content: "Automatically generate vertical short clips from your long videos and upload them to YouTube. AI highlights, subtitles, and metadata built in.",
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
+      { name: "twitter:title", content: "ClipForge AI — Turn long videos into viral shorts" },
+      { name: "twitter:description", content: "Automatically generate vertical short clips from your long videos and upload them to YouTube. AI highlights, subtitles, and metadata built in." },
+      { property: "og:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/26de43f0-ebfc-4481-9a54-ebf7f35d0845/id-preview-26763abf--dc001c7f-296a-42ca-a0c9-c96707a9f151.lovable.app-1784345862249.png" },
+      { name: "twitter:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/26de43f0-ebfc-4481-9a54-ebf7f35d0845/id-preview-26763abf--dc001c7f-296a-42ca-a0c9-c96707a9f151.lovable.app-1784345862249.png" },
     ],
     links: [
       { rel: "stylesheet", href: appCss },
