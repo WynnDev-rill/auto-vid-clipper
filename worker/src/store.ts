@@ -39,7 +39,11 @@ export type Job = {
   estimatedRemainingS?: number;
 };
 
-const STORE_DIR = process.env.WORK_DIR || "./.work";
+const WORK_DIR = path.resolve(process.env.WORK_DIR || "./.work");
+// Keep job metadata outside WORK_DIR: that directory is exposed by /media.
+const STORE_DIR = path.resolve(
+  process.env.STATE_DIR || path.join(path.dirname(WORK_DIR), ".clipforge-state"),
+);
 const STORE_FILE = path.join(STORE_DIR, "jobs.json");
 fs.mkdirSync(STORE_DIR, { recursive: true });
 
@@ -59,6 +63,31 @@ function persist() {
   fs.writeFileSync(tmp, JSON.stringify([...jobs.values()], null, 2));
   fs.renameSync(tmp, STORE_FILE);
 }
+
+// Pipelines are process-local. After a restart no work is actually running, so
+// never leave restored jobs reporting an active state indefinitely.
+for (const job of jobs.values()) {
+  if (["queued", "transcribing", "analyzing", "rendering"].includes(job.status)) {
+    const now = Date.now();
+    jobs.set(job.id, {
+      ...job,
+      status: "failed",
+      error: "Worker restarted while this job was processing. Please retry.",
+      estimatedRemainingS: 0,
+      updatedAt: now,
+      stageStartedAt: now,
+    });
+  } else if (job.status === "cancel_requested") {
+    jobs.set(job.id, {
+      ...job,
+      status: "cancelled",
+      estimatedRemainingS: 0,
+      updatedAt: Date.now(),
+      stageStartedAt: Date.now(),
+    });
+  }
+}
+if (jobs.size) persist();
 
 export function createJob(
   init: Omit<

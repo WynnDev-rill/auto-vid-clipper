@@ -1,6 +1,68 @@
 import { createServerFn } from "@tanstack/react-start";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import type { Database } from "@/integrations/supabase/types";
+import type { BackendJob } from "./backend.server";
+
+type JobRow = Database["public"]["Tables"]["jobs"]["Row"];
+
+async function syncBackendJob(
+  supabase: SupabaseClient<Database>,
+  userId: string,
+  job: JobRow,
+  remote: BackendJob,
+) {
+  // Store terminal artifacts before marking the job done. A failed insert must
+  // leave the job active so a later poll/list request can retry synchronization.
+  if (remote.status === "done" && remote.clips?.length) {
+    const { count, error: countError } = await supabase
+      .from("clips")
+      .select("id", { count: "exact", head: true })
+      .eq("job_id", job.id);
+    if (countError) throw new Error(countError.message);
+    if (!count) {
+      const rows = remote.clips.map((clip) => ({
+        job_id: job.id,
+        user_id: userId,
+        video_url: clip.video_url,
+        thumbnail_url: clip.thumbnail_url,
+        duration_s: clip.duration_s,
+        order_index: clip.order,
+        status: "draft" as const,
+        title: `${job.source_title ?? "Clip"} · Highlight ${clip.order + 1}`,
+        description: clip.transcript ?? "",
+        subtitle_template: "modern",
+        subtitle_style: {},
+        hashtags: ["#shorts", "#viral", "#clipforge"],
+        tags: ["shorts", "clips"],
+      }));
+      const { error } = await supabase.from("clips").insert(rows);
+      if (error) throw new Error(error.message);
+    }
+  }
+
+  const { error } = await supabase
+    .from("jobs")
+    .update({
+      status: remote.status,
+      stage: remote.status,
+      progress: remote.progress,
+      error_message: remote.error ?? null,
+      estimated_remaining_s: remote.estimatedRemainingS ?? null,
+      source_duration_s: remote.sourceDurationS ?? null,
+      completed_clips: remote.completedClips ?? 0,
+      started_at: remote.startedAt ? new Date(remote.startedAt).toISOString() : job.started_at,
+      stage_started_at: remote.stageStartedAt
+        ? new Date(remote.stageStartedAt).toISOString()
+        : job.stage_started_at,
+      last_heartbeat_at: remote.updatedAt
+        ? new Date(remote.updatedAt).toISOString()
+        : new Date().toISOString(),
+    })
+    .eq("id", job.id);
+  if (error) throw new Error(error.message);
+}
 
 const StartJobSchema = z
   .object({
@@ -113,20 +175,7 @@ export const listJobs = createServerFn({ method: "GET" })
             try {
               const remote = await fetchBackendJob(job.backend_job_id!);
               if (!remote) return;
-              await context.supabase
-                .from("jobs")
-                .update({
-                  status: remote.status,
-                  stage: remote.status,
-                  progress: remote.progress,
-                  error_message: remote.error ?? null,
-                  estimated_remaining_s: remote.estimatedRemainingS ?? null,
-                  completed_clips: remote.completedClips ?? 0,
-                  last_heartbeat_at: remote.updatedAt
-                    ? new Date(remote.updatedAt).toISOString()
-                    : new Date().toISOString(),
-                })
-                .eq("id", job.id);
+              await syncBackendJob(context.supabase, context.userId, job, remote);
             } catch (err) {
               console.error("[listJobs] sync failed:", err);
             }
@@ -284,51 +333,7 @@ export const pollJob = createServerFn({ method: "POST" })
       }
       const remote = await fetchBackendJob(job.backend_job_id);
       if (remote) {
-        await supabase
-          .from("jobs")
-          .update({
-            status: remote.status,
-            progress: remote.progress,
-            stage: remote.status,
-            error_message: remote.error ?? null,
-            estimated_remaining_s: remote.estimatedRemainingS ?? null,
-            source_duration_s: remote.sourceDurationS ?? null,
-            completed_clips: remote.completedClips ?? 0,
-            started_at: remote.startedAt
-              ? new Date(remote.startedAt).toISOString()
-              : job.started_at,
-            stage_started_at: remote.stageStartedAt
-              ? new Date(remote.stageStartedAt).toISOString()
-              : job.stage_started_at,
-            last_heartbeat_at: remote.updatedAt
-              ? new Date(remote.updatedAt).toISOString()
-              : new Date().toISOString(),
-          })
-          .eq("id", job.id);
-        if (remote.status === "done" && remote.clips?.length) {
-          const { count } = await supabase
-            .from("clips")
-            .select("id", { count: "exact", head: true })
-            .eq("job_id", job.id);
-          if (!count) {
-            const rows = remote.clips.map((c) => ({
-              job_id: job.id,
-              user_id: userId,
-              video_url: c.video_url,
-              thumbnail_url: c.thumbnail_url,
-              duration_s: c.duration_s,
-              order_index: c.order,
-              status: "draft" as const,
-              title: `${job.source_title ?? "Clip"} · Highlight ${c.order + 1}`,
-              description: c.transcript ?? "",
-              subtitle_template: "modern",
-              subtitle_style: {},
-              hashtags: ["#shorts", "#viral", "#clipforge"],
-              tags: ["shorts", "clips"],
-            }));
-            await supabase.from("clips").insert(rows);
-          }
-        }
+        await syncBackendJob(supabase, userId, job, remote);
         const { data: updated } = await supabase
           .from("jobs")
           .select("*")

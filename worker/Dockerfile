@@ -12,6 +12,7 @@ RUN npm run build
 
 ENV NODE_ENV=production
 ENV WORK_DIR=/data
-VOLUME ["/data"]
+ENV STATE_DIR=/state
+VOLUME ["/data", "/state"]
 EXPOSE 8787
 CMD ["node", "dist/index.js"]
