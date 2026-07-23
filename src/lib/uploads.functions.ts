@@ -41,8 +41,13 @@ export const uploadToYouTube = createServerFn({ method: "POST" })
       .eq("user_id", context.userId)
       .maybeSingle();
 
-    // No YouTube connection OR no source video URL → simulate the upload.
-    if (!yt || !clip.video_url) {
+    const oauthConfigured = Boolean(process.env.GOOGLE_OAUTH_CLIENT_ID && process.env.GOOGLE_OAUTH_CLIENT_SECRET);
+
+    if (!yt) {
+      if (oauthConfigured) {
+        throw new Error("YouTube not connected. Connect your channel in Settings before uploading.");
+      }
+      // OAuth not configured on server — fall back to simulation so the demo still works.
       const simulatedId = `sim_${crypto.randomUUID().slice(0, 11)}`;
       const { data: upload, error } = await context.supabase
         .from("uploads")
@@ -63,6 +68,10 @@ export const uploadToYouTube = createServerFn({ method: "POST" })
       if (error) throw new Error(error.message);
       await context.supabase.from("clips").update({ status: "uploaded" }).eq("id", clip.id);
       return { ok: true as const, uploadId: upload.id, simulated: true, videoId: simulatedId };
+    }
+
+    if (!clip.video_url) {
+      throw new Error("Clip has no rendered video yet. Wait for the render pipeline to finish.");
     }
 
     // Real YouTube upload path

@@ -1,7 +1,8 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
+import { useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { Youtube, LogOut, Bell, Sparkles, Loader2, PlugZap } from "lucide-react";
+import { Youtube, LogOut, Bell, Sparkles, Loader2, PlugZap, Activity } from "lucide-react";
 import { toast } from "sonner";
 import { GradientCard } from "@/components/gradient-card";
 import { getYouTubeConnection, startYouTubeConnect, disconnectYouTube } from "@/lib/youtube.functions";
@@ -22,8 +23,24 @@ function SettingsPage() {
   const sFn = useServerFn(getSettings);
   const upFn = useServerFn(updateSettings);
 
-  const yt = useQuery({ queryKey: ["yt-connection"], queryFn: () => ytFn() });
+  const yt = useQuery({ queryKey: ["yt-connection"], queryFn: () => ytFn(), refetchOnWindowFocus: false });
   const settings = useQuery({ queryKey: ["settings"], queryFn: () => sFn() });
+
+  // Handle OAuth callback redirect: ?yt_connected=1 or ?yt_error=...
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const connected = params.get("yt_connected");
+    const err = params.get("yt_error");
+    if (connected) {
+      toast.success("YouTube connected");
+      qc.invalidateQueries({ queryKey: ["yt-connection"] });
+      qc.invalidateQueries({ queryKey: ["diagnostics"] });
+      window.history.replaceState({}, "", window.location.pathname);
+    } else if (err) {
+      toast.error(`YouTube connect failed: ${err}`);
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+  }, [qc]);
 
   const connect = useMutation({
     mutationFn: () => startFn({ data: { origin: window.location.origin } }),
@@ -69,10 +86,19 @@ function SettingsPage() {
 
   return (
     <div className="space-y-5">
-      <div>
-        <p className="text-xs uppercase tracking-wide text-muted-foreground">Settings</p>
-        <h1 className="font-display text-2xl font-semibold md:text-3xl">Preferences & connections</h1>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs uppercase tracking-wide text-muted-foreground">Settings</p>
+          <h1 className="font-display text-2xl font-semibold md:text-3xl">Preferences & connections</h1>
+        </div>
+        <Link
+          to="/diagnostics"
+          className="inline-flex items-center gap-1.5 rounded-full border border-border px-3 py-1.5 text-xs"
+        >
+          <Activity size={12} /> Diagnostics
+        </Link>
       </div>
+
 
       <GradientCard>
         <div className="flex items-start gap-3">
@@ -95,8 +121,8 @@ function SettingsPage() {
               <>
                 <p className="mt-1 text-sm text-muted-foreground">
                   {yt.data.oauthConfigured
-                    ? "Connect to enable direct uploads."
-                    : "Setup needed — Google OAuth credentials not configured. Uploads run in simulation mode."}
+                    ? "Connect your Google account to enable real uploads to your YouTube channel."
+                    : "Google OAuth credentials not configured on the server. Ask an admin to set GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET."}
                 </p>
                 <button
                   onClick={() => connect.mutate()}
