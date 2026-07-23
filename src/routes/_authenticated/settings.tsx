@@ -86,10 +86,19 @@ function SettingsPage() {
 
   return (
     <div className="space-y-5">
-      <div>
-        <p className="text-xs uppercase tracking-wide text-muted-foreground">Settings</p>
-        <h1 className="font-display text-2xl font-semibold md:text-3xl">Preferences & connections</h1>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs uppercase tracking-wide text-muted-foreground">Settings</p>
+          <h1 className="font-display text-2xl font-semibold md:text-3xl">Preferences & connections</h1>
+        </div>
+        <Link
+          to="/diagnostics"
+          className="inline-flex items-center gap-1.5 rounded-full border border-border px-3 py-1.5 text-xs"
+        >
+          <Activity size={12} /> Diagnostics
+        </Link>
       </div>
+
 
       <GradientCard>
         <div className="flex items-start gap-3">
