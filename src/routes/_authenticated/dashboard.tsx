@@ -72,7 +72,9 @@ function Dashboard() {
               <>
                 <h2 className="font-display text-lg font-semibold">Not connected</h2>
                 <p className="text-xs text-muted-foreground">
-                  {yt.data.oauthConfigured ? "Connect your channel in Settings." : "Uploads will be simulated until Google OAuth is configured."}
+                  {yt.data.oauthConfigured
+                    ? "Connect your channel in Settings to enable real uploads."
+                    : "Google OAuth not configured on the server. See Diagnostics."}
                 </p>
               </>
             )}
