@@ -84,6 +84,28 @@ app.post("/jobs/:id/cancel", requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
+app.get("/settings/whisper-provider", requireAuth, (_req, res) => {
+  const snapshot = getSettingsSnapshot();
+  res.json({
+    provider: snapshot.whisperProvider,
+    lastUsedProvider: snapshot.lastUsedProvider ?? null,
+    lastUsedAt: snapshot.lastUsedAt ?? null,
+    available: listProviderAvailability(),
+    autoOrder: ["groq", "openai", "openrouter"],
+  });
+});
+
+const WhisperProviderSchema = z.object({
+  provider: z.enum(["auto", "groq", "openai", "openrouter"]),
+});
+
+app.post("/settings/whisper-provider", requireAuth, (req, res) => {
+  const parsed = WhisperProviderSchema.safeParse(req.body);
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.message });
+  setWhisperProvider(parsed.data.provider as WhisperProvider);
+  res.json({ ok: true, provider: getWhisperProvider() });
+});
+
 // Serve rendered artifacts. Public on purpose — video_url/thumbnail_url are
 // consumed directly by browsers and YouTube's upload fetcher.
 app.use(
