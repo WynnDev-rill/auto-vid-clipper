@@ -27,9 +27,12 @@ function SettingsPage() {
   const disFn = useServerFn(disconnectYouTube);
   const sFn = useServerFn(getSettings);
   const upFn = useServerFn(updateSettings);
+  const whisperGetFn = useServerFn(getWhisperProviderInfo);
+  const whisperSetFn = useServerFn(setWhisperProviderPreference);
 
   const yt = useQuery({ queryKey: ["yt-connection"], queryFn: () => ytFn(), refetchOnWindowFocus: false });
   const settings = useQuery({ queryKey: ["settings"], queryFn: () => sFn() });
+  const whisper = useQuery({ queryKey: ["whisper-provider"], queryFn: () => whisperGetFn() });
 
   // Handle OAuth callback redirect: ?yt_connected=1 or ?yt_error=...
   useEffect(() => {
