@@ -89,8 +89,8 @@ export type Database = {
           clip_duration: number
           completed_clips: number
           created_at: string
-          estimated_remaining_s: number | null
           error_message: string | null
+          estimated_remaining_s: number | null
           id: string
           last_heartbeat_at: string | null
           progress: number
@@ -112,8 +112,8 @@ export type Database = {
           clip_duration: number
           completed_clips?: number
           created_at?: string
-          estimated_remaining_s?: number | null
           error_message?: string | null
+          estimated_remaining_s?: number | null
           id?: string
           last_heartbeat_at?: string | null
           progress?: number
@@ -135,8 +135,8 @@ export type Database = {
           clip_duration?: number
           completed_clips?: number
           created_at?: string
-          estimated_remaining_s?: number | null
           error_message?: string | null
+          estimated_remaining_s?: number | null
           id?: string
           last_heartbeat_at?: string | null
           progress?: number

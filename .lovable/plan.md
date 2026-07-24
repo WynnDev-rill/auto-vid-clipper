@@ -1,102 +1,64 @@
-# ClipForge AI — Build Plan
+## 1. Watermark "By Wynn" di samping judul
 
-Full Android-first SaaS UI for turning long videos into vertical shorts and uploading to YouTube. Real auth + YouTube upload; heavy AI/FFmpeg work delegated to your backend URL. All AI text (titles, descriptions, hashtags) via Lovable AI Gateway — no user API keys.
+`src/components/logo.tsx`: tambahkan span kecil di samping "ClipForge" — teks `by Wynn` dengan style muted, ukuran kecil, italic/tracking-wide sehingga tampak seperti watermark tanda tangan. Otomatis muncul di semua tempat yang memakai `<Logo />` (header + bottom area).
 
-## Stack decisions (from your answers)
+## 2. Clip duration lebih fleksibel (slider custom)
 
-- **Video processing**: your external backend. UI calls `POST {BACKEND_URL}/jobs`, polls `GET /jobs/:id`. Until you provide the URL, requests are mocked with a `MOCK_MODE` flag so the whole flow is demoable.
-- **AI text**: Lovable AI Gateway (`google/gemini-3-flash-preview`) via server functions. No OpenAI/Whisper key fields in Settings — replaced with connection statuses.
-- **Auth**: Lovable Cloud (Supabase) for app login + Google sign-in. Separate YouTube OAuth flow using **your** Google Cloud OAuth client (needs `youtube.upload` scope — Lovable-managed Google login can't grant this).
-- **DB**: Supabase tables for jobs, clips, uploads, settings.
+`src/routes/_authenticated/create.tsx`:
 
-## Design
+- Pertahankan 4 preset (15/30/45/60s) sebagai tombol cepat.
+- Tambahkan **slider "Custom duration"** (range 5–120 detik, step 1) + numeric input di sampingnya yang menampilkan nilai aktif.
+- State `duration` bebas berupa angka apa pun; preset hanya set nilai slider. Preset yang aktif di-highlight bila nilainya sama.
 
-Dark-first, mobile-first. Deep navy background, purple→blue gradient accents, rounded-2xl cards, subtle glow shadows, animated progress bars (Framer Motion), bottom nav on mobile / collapsible sidebar on wider screens. Font pair: Space Grotesk (display) + Inter (body). Semantic tokens in `src/styles.css`; no hardcoded colors in components.
+`src/types/domain.ts`: longgarkan validasi — biarkan `CLIP_DURATIONS` sebagai preset UI, tapi ekspor konstanta `CLIP_DURATION_MIN = 5` dan `CLIP_DURATION_MAX = 120`.
 
-## Routes (TanStack Start)
+`src/lib/jobs.functions.ts`: ganti validator `clipDuration` dari `.refine(...preset)` menjadi `z.number().int().min(5).max(120)` supaya backend menerima nilai bebas.
 
-Public:
-- `/` — landing (hero, features, CTA)
-- `/auth` — email + Google sign-in
+## 3. Perbaikan setelah klik "Generate clips"
 
-Protected under `_authenticated/`:
-- `/dashboard` — channel card, stats, active jobs, recent uploads
-- `/create` — source video (URL or upload), duration + count picker
-- `/clips/$jobId` — clip editor: preview, subtitle template + style, title/desc/hashtags (AI-generated, editable), thumbnail editor
-- `/upload/$clipId` — visibility, schedule, tags, upload/draft/schedule actions
-- `/history` — filterable list, re-upload / download / delete
-- `/analytics` — usage metrics with recharts
-- `/settings` — Google + YouTube connection cards, theme, notifications, logout
+Masalah yang ditemukan saat menelusuri alur:
 
-Server routes:
-- `/api/public/youtube/callback` — YouTube OAuth callback (exchanges code, stores refresh token)
+- `create.tsx` mengirim `sourceType: "upload"` tanpa file/`uploadKey`, sehingga backend Render akan gagal. Perbaikan: nonaktifkan tab Upload (tampilkan "Coming soon") atau paksa user mengisi URL sebelum Generate diaktifkan. Tombol Generate disabled kalau `tab==='upload'` atau URL kosong.
+- `pollJob` mem-polling terus-menerus dan clip editor menjalankan `setInterval` **tambahan** di `useEffect` — jadinya double-poll setiap 2s dan 2.5s. Perbaikan: hapus `setInterval` manual di `clips.$jobId.tsx`; cukup andalkan `refetchInterval` di `queryOptions`. Panggilan `pollFn` (yang memicu backend sync) dipindah ke `queryFn` (`getJob` dulu, atau ganti queryFn ke `pollFn` supaya setiap refetch sekaligus sync backend).
+- Kalau backend Render mengembalikan error, saat ini tidak ada UI. Perbaikan: bila `job.status === "failed"`, tampilkan card error dengan `error_message` + tombol "Retry" (memanggil `startJob` ulang dengan input sama) dan "Back to create".
+- Toast sukses "Job queued" tetap muncul walau nanti gagal — biarkan, tapi tambahkan validasi URL YouTube sederhana (regex) sebelum submit untuk mengurangi kegagalan.
 
-## Data model (Supabase migration)
+## 4. Menu Jobs baru
 
-- `profiles` (id → auth.users, display_name, avatar_url)
-- `youtube_connections` (user_id, channel_id, channel_title, access_token_expires_at, refresh_token_ciphertext, scopes)
-- `jobs` (id, user_id, source_type, source_url, clip_duration, clip_count, status, progress, backend_job_id, created_at)
-- `clips` (id, job_id, user_id, title, description, hashtags[], subtitle_template, subtitle_style jsonb, thumbnail_url, video_url, duration_s, status)
-- `uploads` (id, clip_id, user_id, youtube_video_id, visibility, scheduled_for, status, uploaded_at)
-- `user_settings` (user_id, theme, notifications_enabled)
+Tambahkan route `src/routes/_authenticated/jobs.tsx`:
 
-RLS: owner-only on all tables. Refresh tokens stored **encrypted** with a `YOUTUBE_TOKEN_ENC_KEY` secret (AES-256-GCM helper in `*.server.ts`).
+- Daftar semua job (`listJobs`) dengan status badge (queued/transcribing/analyzing/rendering/done/failed), progress bar mini, thumbnail sumber, dan waktu mulai.
+- Setiap baris → link ke `/clips/$jobId` (halaman editor sudah ada + akan jadi "job detail" saat processing).
+- Aksi per baris: **Cancel** (untuk job non-final; set status `failed` dengan pesan "Cancelled by user") dan **Retry** (untuk `failed`).
 
-## Server functions
+Tambahkan ke `src/components/app-shell.tsx` NAV: entry "Jobs" (icon `ListChecks`) di posisi setelah Create. Susun ulang: Home · Create · **Jobs** · History · Stats · Settings (bottom nav mobile perlu tetap ringkas — 6 item masih muat karena `min-w-14`; jika terlalu penuh, ganti label Stats jadi ikon-only).
 
-- `startJob({ sourceUrl|uploadKey, duration, count })` → POSTs to backend (or mocks), inserts `jobs` row.
-- `pollJob(jobId)` → GETs backend status, upserts `clips`.
-- `generateMetadata(clipId)` → Lovable AI: returns title/description/hashtags/tags (Zod-validated structured output).
-- `generateThumbnailText(clipId)` → Lovable AI: 3 punchy thumbnail headline options.
-- `saveClipEdits(clipId, patch)`
-- `uploadToYouTube(clipId, { visibility, scheduledFor, title, description, tags })` → refresh access token, YouTube Data API v3 `videos.insert` (resumable upload), records `uploads` row.
-- `disconnectYouTube()`
-- All protected with `requireSupabaseAuth`.
+## 5. Perkiraan waktu selesai (ETA) di detail job
 
-## Secrets you'll add later (via secure form when we reach that step)
+Di clips.$jobId.tsx bagian `isProcessing`:
 
-- `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET` (your Google Cloud project)
-- `YOUTUBE_TOKEN_ENC_KEY` (generated for you)
-- `CLIPFORGE_BACKEND_URL`, `CLIPFORGE_BACKEND_SECRET` (your FFmpeg/Whisper worker)
+- Simpan tabel bobot per-stage (queued 5%, transcribing 35%, analyzing 10%, rendering 45%, done 5%).
+- Hitung ETA sederhana: `elapsed = now - job.created_at`; `remaining = elapsed * (100 - progress) / max(progress, 5)`. Format `mm:ss`.
+- Tampilkan: elapsed time, ETA, dan langkah aktif yang di-highlight (checklist dengan ikon centang untuk stage yang sudah lewat, spinner untuk stage aktif).
+- Tambahkan tombol "Cancel job" (memanggil endpoint cancel yang sama dengan #4).
 
-Until secrets exist, YouTube connect + backend calls show a clean "Setup needed" state instead of erroring.
+## 6. Saran tambahan (opsional, tidak dieksekusi kecuali kamu setuju)
 
-## Mocks
+- Notifikasi browser (Web Notifications API) saat job selesai kalau tab tidak aktif.
+- Estimasi biaya kredit / durasi processing sebelum submit di halaman Create.
+- Preset "durasi acak antara X–Y detik per klip" agar output tidak terasa monoton.
 
-- `MOCK_MODE=true` when `CLIPFORGE_BACKEND_URL` unset: job progresses through `queued → transcribing → analyzing → rendering → done` on a timer; clips get placeholder vertical video + generated poster.
-- YouTube upload in mock mode returns a fake video id and marks upload as "simulated".
+Beritahu kalau ada bagian yang mau ditambah/dihilangkan sebelum aku eksekusi.
 
-## Coding structure
+## Technical details
 
-```
-src/
-  components/          shell, nav, cards, progress, subtitle-preview, thumbnail-editor, forms
-  routes/              file-based routes above
-  lib/
-    *.functions.ts     server functions (client-safe imports)
-    *.server.ts        crypto, youtube client, backend client
-    ai-gateway.server.ts
-  hooks/               useYouTubeConnection, useJobPolling, useMobile
-  types/               shared zod schemas + TS types
-```
+- **Cancel job**: server function baru `cancelJob` di `src/lib/jobs.functions.ts` yang set status `failed` + `error_message='Cancelled by user'` bila status ∈ {queued,transcribing,analyzing,rendering}. Tidak memanggil backend Render (Render worker akan selesai sendiri — clip hasilnya diabaikan karena status sudah final di DB). Catatan: `pollJob` sudah `return { job }` lebih awal kalau status `done`/`failed`, jadi tidak akan menimpa status yang di-cancel.
+- **Retry**: memanggil `startJob` dengan payload dari job lama (butuh menyertakan `source_url`, `source_title`, `clip_duration`, `clip_count` dari row jobs).
+- **Watermark**: pakai className `text-[10px] font-medium uppercase tracking-widest text-muted-foreground/70 ml-1` supaya tidak mengganggu logo utama.
+- **Slider**: pakai `<input type="range">` dengan style `accent-[oklch(0.68_0.22_295)]` yang sudah dipakai di file yang sama.
+- **Files edited**: `src/components/logo.tsx`, `src/components/app-shell.tsx`, `src/routes/_authenticated/create.tsx`, `src/routes/_authenticated/clips.$jobId.tsx`, `src/lib/jobs.functions.ts`, `src/types/domain.ts`.
+- **Files created**: `src/routes/_authenticated/jobs.tsx`.
 
-TypeScript strict, Zod on every server function input, react-hook-form for forms, TanStack Query for reads/mutations, Framer Motion for transitions.
+&nbsp;
 
-## Build order (single turn)
-
-1. Enable Lovable Cloud + provision `LOVABLE_API_KEY`.
-2. Migration for tables + RLS + grants + encryption helper.
-3. Design tokens (`src/styles.css`), root layout with bottom nav / sidebar, protected layout.
-4. Landing + auth pages (Google + email).
-5. Dashboard, Create, Clip editor, Upload, History, Analytics, Settings pages.
-6. Server functions (all mocked-friendly, real where possible).
-7. YouTube OAuth server route + connect/disconnect UI.
-8. `head()` metadata per public route, hero image for OG on landing.
-
-## Explicitly deferred
-
-- Real FFmpeg cutting, Whisper transcription, speaker-active zoom, silence removal, transition rendering — all live on **your** backend; the app hands off + polls.
-- Advanced thumbnail canvas (Fabric.js-style) — v1 ships a template picker + text overlay editor; freeform canvas can come later.
-- Push notifications — v1 shows in-app toasts only.
-
-Approve and I'll build it.
+Sebagai tambahan : mung ada error atau bug atau ada yang kurang yang menyebabkan aplikasi belum bisa bekerja, aku ingin kamu mengetesnya dan laporkan jika ada yang salah atau kurang
