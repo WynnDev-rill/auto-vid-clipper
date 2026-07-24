@@ -74,6 +74,17 @@ function SettingsPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["settings"] }),
   });
 
+  const updWhisper = useMutation({
+    mutationFn: (provider: WhisperProvider) => whisperSetFn({ data: { provider } }),
+    onSuccess: (r) => {
+      toast.success(`Whisper provider set to ${r.provider}`);
+      qc.invalidateQueries({ queryKey: ["whisper-provider"] });
+    },
+    onError: (err: unknown) => {
+      toast.error(err instanceof Error ? err.message : "Failed to update provider");
+    },
+  });
+
   async function signOut() {
     await qc.cancelQueries();
     qc.clear();
