@@ -87,21 +87,14 @@ export type Database = {
           backend_job_id: string | null
           clip_count: number
           clip_duration: number
-          completed_clips: number
           created_at: string
-          estimated_remaining_s: number | null
           error_message: string | null
           id: string
-          last_heartbeat_at: string | null
           progress: number
-          source_duration_s: number | null
           source_title: string | null
           source_type: string
-          source_upload_path: string | null
           source_url: string | null
           stage: string | null
-          stage_started_at: string | null
-          started_at: string | null
           status: string
           updated_at: string
           user_id: string
@@ -110,21 +103,14 @@ export type Database = {
           backend_job_id?: string | null
           clip_count: number
           clip_duration: number
-          completed_clips?: number
           created_at?: string
-          estimated_remaining_s?: number | null
           error_message?: string | null
           id?: string
-          last_heartbeat_at?: string | null
           progress?: number
-          source_duration_s?: number | null
           source_title?: string | null
           source_type: string
-          source_upload_path?: string | null
           source_url?: string | null
           stage?: string | null
-          stage_started_at?: string | null
-          started_at?: string | null
           status?: string
           updated_at?: string
           user_id: string
@@ -133,21 +119,14 @@ export type Database = {
           backend_job_id?: string | null
           clip_count?: number
           clip_duration?: number
-          completed_clips?: number
           created_at?: string
-          estimated_remaining_s?: number | null
           error_message?: string | null
           id?: string
-          last_heartbeat_at?: string | null
           progress?: number
-          source_duration_s?: number | null
           source_title?: string | null
           source_type?: string
-          source_upload_path?: string | null
           source_url?: string | null
           stage?: string | null
-          stage_started_at?: string | null
-          started_at?: string | null
           status?: string
           updated_at?: string
           user_id?: string
