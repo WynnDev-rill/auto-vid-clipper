@@ -5,7 +5,14 @@ import express from "express";
 import { nanoid } from "nanoid";
 import { z } from "zod";
 import { runPipeline } from "./pipeline.js";
+import {
+  getSettingsSnapshot,
+  getWhisperProvider,
+  setWhisperProvider,
+  type WhisperProvider,
+} from "./settings.js";
 import { createJob, getJob, requestCancellation } from "./store.js";
+import { listProviderAvailability } from "./whisper.js";
 
 const app = express();
 app.use(cors());
