@@ -173,6 +173,79 @@ function SettingsPage() {
       </GradientCard>
 
       <GradientCard>
+        <div className="flex items-start gap-3">
+          <div className="grid size-11 place-items-center rounded-2xl bg-gradient-brand-soft">
+            <Mic size={18} className="text-brand-purple" />
+          </div>
+          <div className="flex-1">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="font-semibold">Whisper provider</p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Speech-to-text used during clip generation. Auto tries Groq → OpenAI → OpenRouter and
+                  falls back automatically on rate limits, timeouts, or insufficient balance.
+                </p>
+              </div>
+            </div>
+
+            {whisper.isLoading ? (
+              <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
+                <Loader2 size={12} className="animate-spin" /> Loading provider settings…
+              </div>
+            ) : !whisper.data?.configured ? (
+              <p className="mt-3 text-xs text-destructive">
+                Backend worker is not reachable. Check CLIPFORGE_BACKEND_URL.
+              </p>
+            ) : (
+              <>
+                <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  {(["auto", "groq", "openai", "openrouter"] as WhisperProvider[]).map((p) => {
+                    const active = whisper.data!.provider === p;
+                    const disabled =
+                      p !== "auto" && !whisper.data!.available[p as "groq" | "openai" | "openrouter"];
+                    return (
+                      <button
+                        key={p}
+                        onClick={() => updWhisper.mutate(p)}
+                        disabled={disabled || updWhisper.isPending}
+                        className={`rounded-xl border px-3 py-2 text-xs font-semibold capitalize transition ${
+                          active
+                            ? "border-transparent bg-gradient-brand text-primary-foreground shadow-glow"
+                            : "border-border bg-secondary/40 text-foreground"
+                        } disabled:opacity-40`}
+                      >
+                        {p === "auto" ? "Auto (Recommended)" : p}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="mt-3 space-y-1 text-xs text-muted-foreground">
+                  <p>
+                    Selected: <span className="font-semibold text-foreground">{whisper.data.provider}</span>
+                    {whisper.data.lastUsedProvider ? (
+                      <>
+                        {" · Last used: "}
+                        <span className="font-semibold text-brand-cyan">
+                          {whisper.data.lastUsedProvider}
+                        </span>
+                      </>
+                    ) : null}
+                  </p>
+                  <p>
+                    Keys detected:{" "}
+                    {(["groq", "openai", "openrouter"] as const)
+                      .map((k) => `${k}: ${whisper.data!.available[k] ? "✓" : "—"}`)
+                      .join(" · ")}
+                  </p>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      </GradientCard>
+
+
+      <GradientCard>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="grid size-11 place-items-center rounded-2xl bg-secondary">
