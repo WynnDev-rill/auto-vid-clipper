@@ -11,6 +11,7 @@ import { useEffect, type ReactNode } from "react";
 
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
+import { persistYouTubeProviderSession } from "../lib/youtube-provider.client";
 import { supabase } from "@/integrations/supabase/client";
 
 declare global {
@@ -107,11 +108,18 @@ function RootComponent() {
           const code = callback.searchParams.get("code");
           if (!code) throw new Error("Google callback did not include an authorization code.");
 
-          const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
+          const { data, error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
           if (exchangeError) throw exchangeError;
 
+          if (callback.searchParams.get("youtube") === "1") {
+            if (!data.session) throw new Error("Google returned no session for YouTube authorization.");
+            await persistYouTubeProviderSession(data.session);
+            await queryClient.invalidateQueries({ queryKey: ["yt-connection"] });
+            toast.success("YouTube connected");
+          }
+
           const destination = safeNativeRedirect(callback.searchParams.get("redirect"));
-          await new Promise((resolve) => window.setTimeout(resolve, 350));
+          await new Promise((resolve) => window.setTimeout(resolve, 450));
           window.location.replace(destination);
         } catch (error) {
           toast.error(error instanceof Error ? error.message : "Could not finish Google sign-in");
@@ -122,7 +130,7 @@ function RootComponent() {
     return () => {
       delete window.__clipforgeCompleteAuth;
     };
-  }, []);
+  }, [queryClient]);
 
   useEffect(() => {
     const { data } = supabase.auth.onAuthStateChange((event) => {
