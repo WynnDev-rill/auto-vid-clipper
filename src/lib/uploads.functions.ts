@@ -16,8 +16,8 @@ export const listUploads = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }) => {
     const { data, error } = await context.supabase
-      .from("uploads")
-      .select("*, clips(title, thumbnail_url, duration_s)")
+      .from("clipforge_uploads")
+      .select("*, clipforge_clips(title, thumbnail_url, duration_s)")
       .order("created_at", { ascending: false })
       .limit(100);
     if (error) throw new Error(error.message);
@@ -29,14 +29,14 @@ export const uploadToYouTube = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => UploadSchema.parse(d))
   .handler(async ({ data, context }) => {
     const { data: clip } = await context.supabase
-      .from("clips")
+      .from("clipforge_clips")
       .select("*")
       .eq("id", data.clipId)
       .maybeSingle();
     if (!clip) throw new Error("Clip not found");
 
     const { data: yt } = await context.supabase
-      .from("youtube_connections")
+      .from("clipforge_youtube_connections")
       .select("*")
       .eq("user_id", context.userId)
       .maybeSingle();
@@ -47,10 +47,9 @@ export const uploadToYouTube = createServerFn({ method: "POST" })
       if (oauthConfigured) {
         throw new Error("YouTube not connected. Connect your channel in Settings before uploading.");
       }
-      // OAuth not configured on server — fall back to simulation so the demo still works.
       const simulatedId = `sim_${crypto.randomUUID().slice(0, 11)}`;
       const { data: upload, error } = await context.supabase
-        .from("uploads")
+        .from("clipforge_uploads")
         .insert({
           clip_id: clip.id,
           user_id: context.userId,
@@ -66,7 +65,7 @@ export const uploadToYouTube = createServerFn({ method: "POST" })
         .select()
         .single();
       if (error) throw new Error(error.message);
-      await context.supabase.from("clips").update({ status: "uploaded" }).eq("id", clip.id);
+      await context.supabase.from("clipforge_clips").update({ status: "uploaded" }).eq("id", clip.id);
       return { ok: true as const, uploadId: upload.id, simulated: true, videoId: simulatedId };
     }
 
@@ -74,9 +73,7 @@ export const uploadToYouTube = createServerFn({ method: "POST" })
       throw new Error("Clip has no rendered video yet. Wait for the render pipeline to finish.");
     }
 
-    // Real YouTube upload path
     const { ensureFreshAccessToken } = await import("./youtube.server");
-    const { encryptToken } = await import("./crypto.server");
     const fresh = await ensureFreshAccessToken({
       access_token: yt.access_token,
       access_token_expires_at: yt.access_token_expires_at,
@@ -84,23 +81,17 @@ export const uploadToYouTube = createServerFn({ method: "POST" })
     });
     if (fresh.refreshed) {
       await context.supabase
-        .from("youtube_connections")
+        .from("clipforge_youtube_connections")
         .update({ access_token: fresh.accessToken, access_token_expires_at: fresh.expiresAt })
         .eq("user_id", context.userId);
     }
 
-    // Fetch the clip video bytes
     const videoRes = await fetch(clip.video_url);
     if (!videoRes.ok) throw new Error("Failed to fetch clip video");
     const videoBuf = await videoRes.arrayBuffer();
 
     const metadata = {
-      snippet: {
-        title: data.title,
-        description: data.description,
-        tags: data.tags,
-        categoryId: "22",
-      },
+      snippet: { title: data.title, description: data.description, tags: data.tags, categoryId: "22" },
       status: {
         privacyStatus: data.mode === "draft" ? "private" : data.visibility,
         publishAt: data.mode === "schedule" ? data.scheduledFor : undefined,
@@ -139,8 +130,8 @@ export const uploadToYouTube = createServerFn({ method: "POST" })
 
     if (!res.ok) {
       const errText = await res.text();
-      const { data: failedUpload } = await context.supabase
-        .from("uploads")
+      await context.supabase
+        .from("clipforge_uploads")
         .insert({
           clip_id: clip.id,
           user_id: context.userId,
@@ -149,17 +140,13 @@ export const uploadToYouTube = createServerFn({ method: "POST" })
           error_message: errText.slice(0, 500),
           title: data.title,
           description: data.description,
-        })
-        .select()
-        .single();
-      // touch encryptToken to keep import used (avoids TS unused-import lint)
-      void encryptToken;
+        });
       throw new Error(`YouTube upload failed: ${errText.slice(0, 200)}`);
     }
 
     const uploaded = (await res.json()) as { id: string };
     const { data: upload, error } = await context.supabase
-      .from("uploads")
+      .from("clipforge_uploads")
       .insert({
         clip_id: clip.id,
         user_id: context.userId,
@@ -175,7 +162,7 @@ export const uploadToYouTube = createServerFn({ method: "POST" })
       .select()
       .single();
     if (error) throw new Error(error.message);
-    await context.supabase.from("clips").update({ status: "uploaded" }).eq("id", clip.id);
+    await context.supabase.from("clipforge_clips").update({ status: "uploaded" }).eq("id", clip.id);
     return { ok: true as const, uploadId: upload.id, simulated: false, videoId: uploaded.id };
   });
 
@@ -183,7 +170,7 @@ export const deleteUpload = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => z.object({ uploadId: z.string().uuid() }).parse(d))
   .handler(async ({ data, context }) => {
-    const { error } = await context.supabase.from("uploads").delete().eq("id", data.uploadId);
+    const { error } = await context.supabase.from("clipforge_uploads").delete().eq("id", data.uploadId);
     if (error) throw new Error(error.message);
     return { ok: true };
   });
