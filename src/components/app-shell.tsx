@@ -1,11 +1,11 @@
 import { Link, useRouterState } from "@tanstack/react-router";
-import { LayoutDashboard, Wand2, History, BarChart3, Settings, ListTodo } from "lucide-react";
+import { Home, Wand2, History, BarChart3, Settings, ListTodo } from "lucide-react";
 import type { ReactNode } from "react";
 import { Logo } from "./logo";
 import { cn } from "@/lib/utils";
 
 const NAV = [
-  { to: "/dashboard", label: "Home", icon: LayoutDashboard },
+  { to: "/dashboard", label: "Home", icon: Home },
   { to: "/create", label: "Create", icon: Wand2 },
   { to: "/jobs", label: "Jobs", icon: ListTodo },
   { to: "/history", label: "History", icon: History },
@@ -17,11 +17,10 @@ export function AppShell({ children }: { children: ReactNode }) {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
 
   return (
-    <div className="min-h-screen">
-      {/* Top bar (mobile + desktop) */}
-      <header className="sticky top-0 z-30 border-b border-border/60 bg-background/70 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3 md:px-6">
-          <Link to="/dashboard" className="focus:outline-none">
+    <div className="min-h-dvh bg-background">
+      <header className="sticky top-0 z-40 border-b border-white/8 bg-[#071022]">
+        <div className="mx-auto flex h-[76px] max-w-6xl items-center justify-between px-5 md:px-6">
+          <Link to="/dashboard" className="focus:outline-none" aria-label="ClipForge home">
             <Logo />
           </Link>
           <nav className="hidden gap-1 md:flex">
@@ -33,13 +32,13 @@ export function AppShell({ children }: { children: ReactNode }) {
                   key={item.to}
                   to={item.to}
                   className={cn(
-                    "inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm transition-colors",
+                    "inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm transition-colors",
                     active
-                      ? "bg-gradient-brand text-primary-foreground shadow-glow"
+                      ? "bg-primary/12 text-brand-blue"
                       : "text-muted-foreground hover:bg-secondary hover:text-foreground",
                   )}
                 >
-                  <Icon size={16} />
+                  <Icon size={17} />
                   {item.label}
                 </Link>
               );
@@ -48,29 +47,32 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
       </header>
 
-      <main className="mx-auto max-w-6xl px-4 pb-28 pt-4 md:px-6 md:pb-10">{children}</main>
+      <main className="mx-auto max-w-6xl px-4 pb-28 pt-5 md:px-6 md:pb-10">{children}</main>
 
-      {/* Bottom nav (mobile) */}
-      <nav className="fixed bottom-3 left-1/2 z-30 flex -translate-x-1/2 gap-1 rounded-full border border-border/60 bg-card/80 p-1.5 shadow-glow backdrop-blur-xl md:hidden">
-        {NAV.map((item) => {
-          const active = pathname.startsWith(item.to);
-          const Icon = item.icon;
-          return (
-            <Link
-              key={item.to}
-              to={item.to}
-              className={cn(
-                "flex min-w-14 flex-col items-center gap-0.5 rounded-full px-3 py-1.5 text-[10px] font-medium transition-colors",
-                active
-                  ? "bg-gradient-brand text-primary-foreground"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <Icon size={18} />
-              {item.label}
-            </Link>
-          );
-        })}
+      <nav
+        className="fixed inset-x-0 bottom-0 z-50 border-t border-white/10 bg-[#071022] md:hidden"
+        aria-label="Main navigation"
+      >
+        <div className="mx-auto flex h-[78px] max-w-xl items-stretch px-1">
+          {NAV.map((item) => {
+            const active = pathname.startsWith(item.to);
+            const Icon = item.icon;
+            return (
+              <Link
+                key={item.to}
+                to={item.to}
+                className={cn(
+                  "relative flex min-w-0 flex-1 flex-col items-center justify-center gap-1 px-1 text-[10px] font-medium transition-colors",
+                  active ? "text-brand-blue" : "text-muted-foreground",
+                )}
+              >
+                {active ? <span className="absolute inset-x-1 top-0 mx-auto h-0.5 w-10 rounded-full bg-brand-blue" /> : null}
+                <Icon size={22} strokeWidth={active ? 2.4 : 2} />
+                <span className="max-w-full truncate">{item.label}</span>
+              </Link>
+            );
+          })}
+        </div>
       </nav>
     </div>
   );

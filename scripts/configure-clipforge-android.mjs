@@ -6,6 +6,7 @@ const androidRoot = path.join(root, 'android');
 const manifestPath = path.join(androidRoot, 'app/src/main/AndroidManifest.xml');
 const activityPath = path.join(androidRoot, 'app/src/main/java/com/wynndev/clipforge/MainActivity.java');
 const stylesPath = path.join(androidRoot, 'app/src/main/res/values/styles.xml');
+const stylesV35Path = path.join(androidRoot, 'app/src/main/res/values-v35/styles.xml');
 
 if (!fs.existsSync(manifestPath)) throw new Error('AndroidManifest.xml not found; run npx cap add/sync android first.');
 
@@ -45,7 +46,10 @@ import android.os.Bundle;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebView;
 import android.view.Window;
+import androidx.core.graphics.Insets;
+import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
+import androidx.core.view.WindowInsetsCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 import com.getcapacitor.BridgeActivity;
 import org.json.JSONObject;
@@ -58,10 +62,11 @@ public class MainActivity extends BridgeActivity {
         super.onCreate(savedInstanceState);
         configureSystemBars();
         WebView webView = getBridge().getWebView();
+        applySystemBarInsets(webView);
         String ua = webView.getSettings().getUserAgentString();
         if (ua == null) ua = "";
         if (!ua.contains("ClipForge/")) {
-            webView.getSettings().setUserAgentString(ua + " ClipForge/1.1.0");
+            webView.getSettings().setUserAgentString(ua + " ClipForge/1.1.1");
         }
         webView.addJavascriptInterface(new ClipForgeNativeBridge(), "ClipForgeNative");
         handleAuthIntent(getIntent());
@@ -82,6 +87,7 @@ public class MainActivity extends BridgeActivity {
 
     private void configureSystemBars() {
         Window window = getWindow();
+        WindowCompat.setDecorFitsSystemWindows(window, true);
         window.setStatusBarColor(Color.parseColor("#303030"));
         window.setNavigationBarColor(Color.parseColor("#E5E7EB"));
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -94,6 +100,15 @@ public class MainActivity extends BridgeActivity {
         WindowInsetsControllerCompat controller = WindowCompat.getInsetsController(window, window.getDecorView());
         controller.setAppearanceLightStatusBars(false);
         controller.setAppearanceLightNavigationBars(true);
+    }
+
+    private void applySystemBarInsets(WebView webView) {
+        ViewCompat.setOnApplyWindowInsetsListener(webView, (view, windowInsets) -> {
+            Insets bars = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars());
+            view.setPadding(bars.left, bars.top, bars.right, bars.bottom);
+            return WindowInsetsCompat.CONSUMED;
+        });
+        ViewCompat.requestApplyInsets(webView);
     }
 
     private boolean isValidOAuthUrl(Uri uri) {
@@ -115,7 +130,7 @@ public class MainActivity extends BridgeActivity {
 
         final String raw = data.toString();
         WebView webView = getBridge().getWebView();
-        long[] delays = new long[] { 300L, 900L, 1800L, 3200L };
+        long[] delays = new long[] { 350L, 1000L, 2000L, 3500L };
         for (long delay : delays) {
             webView.postDelayed(() -> {
                 String quoted = JSONObject.quote(raw);
@@ -143,20 +158,27 @@ public class MainActivity extends BridgeActivity {
 }
 `);
 
-if (fs.existsSync(stylesPath)) {
-  let styles = fs.readFileSync(stylesPath, 'utf8');
-  const addItems = (name, items) => {
+function addItemsToStyles(stylesInput, items) {
+  let styles = stylesInput;
+  const addItems = (name) => {
     const re = new RegExp(`(<style\\s+name="${name}"[^>]*>)([\\s\\S]*?)(</style>)`);
     styles = styles.replace(re, (_all, open, body, close) => {
       let next = body;
       for (const [key, value] of items) {
-        const itemRe = new RegExp(`<item\\s+name="${key.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}"[^>]*>[\\s\\S]*?<\\/item>`);
+        const escaped = key.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&');
+        const itemRe = new RegExp(`<item\\s+name="${escaped}"[^>]*>[\\s\\S]*?<\\/item>`);
         if (itemRe.test(next)) next = next.replace(itemRe, `<item name="${key}">${value}</item>`);
         else next += `\n        <item name="${key}">${value}</item>`;
       }
       return `${open}${next}${close}`;
     });
   };
+  addItems('AppTheme.NoActionBar');
+  addItems('AppTheme.NoActionBarLaunch');
+  return styles;
+}
+
+if (fs.existsSync(stylesPath)) {
   const barItems = [
     ['android:windowBackground', '#303030'],
     ['android:statusBarColor', '#303030'],
@@ -164,9 +186,15 @@ if (fs.existsSync(stylesPath)) {
     ['android:windowLightStatusBar', 'false'],
     ['android:windowLightNavigationBar', 'true'],
   ];
-  addItems('AppTheme.NoActionBar', barItems);
-  addItems('AppTheme.NoActionBarLaunch', barItems);
+  const styles = addItemsToStyles(fs.readFileSync(stylesPath, 'utf8'), barItems);
   fs.writeFileSync(stylesPath, styles);
+
+  // Android 15+ enforces edge-to-edge for newer targets. Keep the system bars
+  // visually separate like a native app, and retain the WebView inset listener
+  // above as a second line of defense on OEM builds.
+  fs.mkdirSync(path.dirname(stylesV35Path), { recursive: true });
+  const v35 = addItemsToStyles(styles, [['android:windowOptOutEdgeToEdgeEnforcement', 'true']]);
+  fs.writeFileSync(stylesV35Path, v35);
 }
 
-console.log('Configured ClipForge Android: native OAuth callback, external browser bridge, stable system-bar appearance.');
+console.log('Configured ClipForge Android: native OAuth, persistent app shell, and isolated system bars.');

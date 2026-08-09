@@ -1,6 +1,8 @@
 // Server-only client for the external FFmpeg/Whisper backend.
-// When CLIPFORGE_BACKEND_URL is not set we return null so callers can fall
-// back to a local mock progression.
+// ClipForge has a dedicated Render worker, so production no longer depends on
+// an optional Lovable-only environment variable just to dispatch real jobs.
+
+const DEFAULT_BACKEND_URL = "https://auto-vid-clipper.onrender.com";
 
 export type BackendJob = {
   id: string;
@@ -20,6 +22,8 @@ export type BackendJob = {
     thumbnail_url: string;
     duration_s: number;
     transcript?: string;
+    youtube_video_id?: string;
+    youtube_error?: string;
   }>;
   error?: string;
   startedAt?: number;
@@ -32,9 +36,14 @@ export type BackendJob = {
 };
 
 export function getBackendConfig() {
-  const url = process.env.CLIPFORGE_BACKEND_URL;
+  const url = process.env.CLIPFORGE_BACKEND_URL || DEFAULT_BACKEND_URL;
   const secret = process.env.CLIPFORGE_BACKEND_SECRET;
   return { url, secret, configured: Boolean(url) };
+}
+
+function authorization(accessToken?: string, secret?: string) {
+  const token = accessToken || secret;
+  return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
 export async function createBackendJob(input: {
@@ -44,42 +53,53 @@ export async function createBackendJob(input: {
   clipCount: number;
   userId: string;
   jobId: string;
+  accessToken?: string;
+  youtubeAccessToken?: string;
+  youtubeVisibility?: "public" | "unlisted" | "private";
 }): Promise<{ backendJobId: string } | null> {
   const { url, secret, configured } = getBackendConfig();
   if (!configured || !url) return null;
+  const { accessToken, ...payload } = input;
   const res = await fetch(`${url.replace(/\/$/, "")}/jobs`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      ...(secret ? { Authorization: `Bearer ${secret}` } : {}),
+      ...authorization(accessToken, secret),
     },
-    body: JSON.stringify(input),
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(45_000),
   });
-  if (!res.ok) throw new Error(`Backend create job failed: ${await res.text()}`);
+  if (!res.ok) throw new Error(`Backend create job failed (${res.status}): ${await res.text()}`);
   const data = (await res.json()) as { id: string };
   return { backendJobId: data.id };
 }
 
-export async function fetchBackendJob(backendJobId: string): Promise<BackendJob | null> {
+export async function fetchBackendJob(
+  backendJobId: string,
+  accessToken?: string,
+): Promise<BackendJob | null> {
   const { url, secret, configured } = getBackendConfig();
   if (!configured || !url) return null;
   const res = await fetch(`${url.replace(/\/$/, "")}/jobs/${backendJobId}`, {
-    headers: { ...(secret ? { Authorization: `Bearer ${secret}` } : {}) },
-    signal: AbortSignal.timeout(15_000),
+    headers: authorization(accessToken, secret),
+    signal: AbortSignal.timeout(30_000),
   });
   if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`Backend fetch job failed: ${await res.text()}`);
+  if (!res.ok) throw new Error(`Backend fetch job failed (${res.status}): ${await res.text()}`);
   return (await res.json()) as BackendJob;
 }
 
-export async function cancelBackendJob(backendJobId: string): Promise<void> {
+export async function cancelBackendJob(
+  backendJobId: string,
+  accessToken?: string,
+): Promise<void> {
   const { url, secret, configured } = getBackendConfig();
   if (!configured || !url) return;
   const res = await fetch(`${url.replace(/\/$/, "")}/jobs/${backendJobId}/cancel`, {
     method: "POST",
-    headers: { ...(secret ? { Authorization: `Bearer ${secret}` } : {}) },
-    signal: AbortSignal.timeout(15_000),
+    headers: authorization(accessToken, secret),
+    signal: AbortSignal.timeout(30_000),
   });
   if (!res.ok && res.status !== 409)
-    throw new Error(`Backend cancel job failed: ${await res.text()}`);
+    throw new Error(`Backend cancel job failed (${res.status}): ${await res.text()}`);
 }

@@ -7,6 +7,8 @@ export type ClipResult = {
   thumbnail_url: string;
   duration_s: number;
   transcript?: string;
+  youtube_video_id?: string;
+  youtube_error?: string;
 };
 
 export type JobStatus =
@@ -26,6 +28,8 @@ export type Job = {
   sourceUrl?: string;
   clipDuration: number;
   clipCount: number;
+  youtubeAccessToken?: string;
+  youtubeVisibility?: "public" | "unlisted" | "private";
   status: JobStatus;
   progress: number;
   clips: ClipResult[];
@@ -40,7 +44,6 @@ export type Job = {
 };
 
 const WORK_DIR = path.resolve(process.env.WORK_DIR || "./.work");
-// Keep job metadata outside WORK_DIR: that directory is exposed by /media.
 const STORE_DIR = path.resolve(
   process.env.STATE_DIR || path.join(path.dirname(WORK_DIR), ".clipforge-state"),
 );
@@ -59,13 +62,15 @@ function loadJobs(): Map<string, Job> {
 const jobs = loadJobs();
 
 function persist() {
+  // Google access tokens are deliberately process-memory only. Render cannot
+  // resume an in-flight FFmpeg pipeline after a restart anyway, so there is no
+  // reason to leave third-party credentials on disk.
+  const safeJobs = [...jobs.values()].map(({ youtubeAccessToken: _token, ...job }) => job);
   const tmp = `${STORE_FILE}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify([...jobs.values()], null, 2));
+  fs.writeFileSync(tmp, JSON.stringify(safeJobs, null, 2));
   fs.renameSync(tmp, STORE_FILE);
 }
 
-// Pipelines are process-local. After a restart no work is actually running, so
-// never leave restored jobs reporting an active state indefinitely.
 for (const job of jobs.values()) {
   if (["queued", "transcribing", "analyzing", "rendering"].includes(job.status)) {
     const now = Date.now();

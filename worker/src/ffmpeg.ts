@@ -2,10 +2,14 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import ffmpegLib from "fluent-ffmpeg";
+import ffmpegStatic from "ffmpeg-static";
+import ffprobeInstaller from "@ffprobe-installer/ffprobe";
 import type { Word } from "./whisper.js";
 
-if (process.env.FFMPEG_PATH) ffmpegLib.setFfmpegPath(process.env.FFMPEG_PATH);
-if (process.env.FFPROBE_PATH) ffmpegLib.setFfprobePath(process.env.FFPROBE_PATH);
+const FFMPEG_BIN = process.env.FFMPEG_PATH || ffmpegStatic || "ffmpeg";
+const FFPROBE_BIN = process.env.FFPROBE_PATH || ffprobeInstaller.path || "ffprobe";
+ffmpegLib.setFfmpegPath(FFMPEG_BIN);
+ffmpegLib.setFfprobePath(FFPROBE_BIN);
 
 export function probeDuration(file: string): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -16,7 +20,6 @@ export function probeDuration(file: string): Promise<number> {
   });
 }
 
-/** Extract mono 16k WAV for Whisper. */
 export function extractAudio(input: string, output: string): Promise<void> {
   return new Promise((resolve, reject) => {
     ffmpegLib(input)
@@ -30,12 +33,6 @@ export function extractAudio(input: string, output: string): Promise<void> {
   });
 }
 
-/**
- * Render a 9:16 clip with burned-in subtitles.
- *  - Crops center of source to 9:16 and scales to 1080x1920
- *  - Burns a karaoke-style ASS subtitle file
- *  - Emits an MP4 (H.264 + AAC) and a JPG thumbnail
- */
 export async function renderClip(opts: {
   sourceVideo: string;
   outMp4: string;
@@ -49,10 +46,6 @@ export async function renderClip(opts: {
 
   const assPath = path.join(dir, `${path.basename(opts.outMp4, ".mp4")}.ass`);
   fs.writeFileSync(assPath, buildAss(opts.words, opts.startS, opts.endS), "utf8");
-
-  // FFmpeg filter:
-  //   crop the center to 9:16, scale to 1080x1920, then burn subtitles.
-  //   ass filter needs an escaped path.
   const escapedAss = assPath.replace(/\\/g, "/").replace(/:/g, "\\:").replace(/'/g, "\\'");
   const vf =
     `crop='min(iw,ih*9/16)':'min(ih,iw*16/9)':(iw-min(iw\\,ih*9/16))/2:(ih-min(ih\\,iw*16/9))/2,` +
@@ -74,7 +67,6 @@ export async function renderClip(opts: {
     opts.outMp4,
   ]);
 
-  // Thumbnail from ~15% into the clip.
   const thumbAt = (opts.endS - opts.startS) * 0.15;
   await runFfmpeg([
     "-y",
@@ -88,19 +80,16 @@ export async function renderClip(opts: {
 
 function runFfmpeg(args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
-    const bin = process.env.FFMPEG_PATH || "ffmpeg";
-    const p = spawn(bin, args, { stdio: ["ignore", "ignore", "pipe"] });
+    const p = spawn(FFMPEG_BIN, args, { stdio: ["ignore", "ignore", "pipe"] });
     let err = "";
     p.stderr.on("data", (b) => { err += b.toString(); });
     p.on("close", (code) => {
       if (code === 0) resolve();
-      else reject(new Error(`ffmpeg exited ${code}: ${err.slice(-500)}`));
+      else reject(new Error(`ffmpeg exited ${code}: ${err.slice(-700)}`));
     });
     p.on("error", reject);
   });
 }
-
-// ---------------- ASS subtitle builder ----------------
 
 function fmtAssTime(t: number): string {
   if (t < 0) t = 0;
@@ -111,10 +100,6 @@ function fmtAssTime(t: number): string {
   return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.${String(cs).padStart(2, "0")}`;
 }
 
-/**
- * Build a simple ASS subtitle track: group ~4 words per line, and highlight
- * the currently-spoken word with a bright color.
- */
 function buildAss(words: Word[], clipStart: number, clipEnd: number): string {
   const inClip = words
     .filter((w) => w.end > clipStart && w.start < clipEnd)
@@ -127,9 +112,7 @@ function buildAss(words: Word[], clipStart: number, clipEnd: number): string {
 
   const groupSize = 4;
   const groups: Array<typeof inClip> = [];
-  for (let i = 0; i < inClip.length; i += groupSize) {
-    groups.push(inClip.slice(i, i + groupSize));
-  }
+  for (let i = 0; i < inClip.length; i += groupSize) groups.push(inClip.slice(i, i + groupSize));
 
   const header = `[Script Info]
 ScriptType: v4.00+
@@ -150,7 +133,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     if (grp.length === 0) continue;
     const gStart = grp[0].start;
     const gEnd = grp[grp.length - 1].end;
-    // Emit one dialogue line per active word, with the active word colored.
     for (let i = 0; i < grp.length; i++) {
       const active = grp[i];
       const parts = grp.map((w, j) =>
@@ -158,19 +140,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
           ? `{\\c&H00A855F7&\\b1}${escapeAss(w.word)}{\\c&HFFFFFF&\\b0}`
           : escapeAss(w.word),
       );
-      const text = parts.join(" ");
       events.push(
-        `Dialogue: 0,${fmtAssTime(active.start)},${fmtAssTime(active.end)},Base,,0,0,0,,${text}`,
+        `Dialogue: 0,${fmtAssTime(active.start)},${fmtAssTime(active.end)},Base,,0,0,0,,${parts.join(" ")}`,
       );
     }
-    // Fallback for gaps between words: show the whole group plain.
     events.push(
-      `Dialogue: 0,${fmtAssTime(gStart)},${fmtAssTime(gEnd)},Base,,0,0,0,,${grp
-        .map((w) => escapeAss(w.word))
-        .join(" ")}`,
+      `Dialogue: 0,${fmtAssTime(gStart)},${fmtAssTime(gEnd)},Base,,0,0,0,,${grp.map((w) => escapeAss(w.word)).join(" ")}`,
     );
   }
-
   return header + events.join("\n") + "\n";
 }
 

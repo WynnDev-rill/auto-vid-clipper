@@ -1,11 +1,11 @@
 import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
-import { useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { Youtube, LogOut, Bell, Sparkles, Loader2, PlugZap, Activity, Mic } from "lucide-react";
 import { toast } from "sonner";
 import { GradientCard } from "@/components/gradient-card";
-import { getYouTubeConnection, startYouTubeConnect, disconnectYouTube } from "@/lib/youtube.functions";
+import { getYouTubeConnection, disconnectYouTube } from "@/lib/youtube.functions";
+import { YOUTUBE_PROVIDER_SCOPES } from "@/lib/youtube-provider.client";
 import { getSettings, updateSettings } from "@/lib/analytics.functions";
 import {
   getWhisperProviderInfo,
@@ -23,41 +23,47 @@ function SettingsPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const ytFn = useServerFn(getYouTubeConnection);
-  const startFn = useServerFn(startYouTubeConnect);
   const disFn = useServerFn(disconnectYouTube);
   const sFn = useServerFn(getSettings);
   const upFn = useServerFn(updateSettings);
   const whisperGetFn = useServerFn(getWhisperProviderInfo);
   const whisperSetFn = useServerFn(setWhisperProviderPreference);
 
-  const yt = useQuery({ queryKey: ["yt-connection"], queryFn: () => ytFn(), refetchOnWindowFocus: false });
+  const yt = useQuery({ queryKey: ["yt-connection"], queryFn: () => ytFn(), refetchOnWindowFocus: true });
   const settings = useQuery({ queryKey: ["settings"], queryFn: () => sFn() });
   const whisper = useQuery({ queryKey: ["whisper-provider"], queryFn: () => whisperGetFn() });
 
-  // Handle OAuth callback redirect: ?yt_connected=1 or ?yt_error=...
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const connected = params.get("yt_connected");
-    const err = params.get("yt_error");
-    if (connected) {
-      toast.success("YouTube connected");
-      qc.invalidateQueries({ queryKey: ["yt-connection"] });
-      qc.invalidateQueries({ queryKey: ["diagnostics"] });
-      window.history.replaceState({}, "", window.location.pathname);
-    } else if (err) {
-      toast.error(`YouTube connect failed: ${err}`);
-      window.history.replaceState({}, "", window.location.pathname);
-    }
-  }, [qc]);
-
   const connect = useMutation({
-    mutationFn: () => startFn({ data: { origin: window.location.origin } }),
-    onSuccess: (r) => {
-      if (!r.configured) {
-        toast.error("Google OAuth not configured. Ask an admin to add GOOGLE_OAUTH_CLIENT_ID / SECRET.");
+    mutationFn: async () => {
+      const nativeShell = /(?:^|\s)ClipForge\//.test(navigator.userAgent);
+      const callback = new URL("/auth", window.location.origin);
+      callback.searchParams.set("redirect", "/settings");
+      callback.searchParams.set("youtube", "1");
+      if (nativeShell) callback.searchParams.set("native", "1");
+
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: {
+          redirectTo: callback.toString(),
+          skipBrowserRedirect: nativeShell,
+          scopes: YOUTUBE_PROVIDER_SCOPES,
+          queryParams: {
+            access_type: "offline",
+            prompt: "consent",
+          },
+        },
+      });
+      if (error) throw error;
+      if (!data.url) throw new Error("Google did not return an authorization URL.");
+
+      if (nativeShell && window.ClipForgeNative?.openExternal) {
+        window.ClipForgeNative.openExternal(data.url);
         return;
       }
-      if (r.url) window.location.href = r.url;
+      window.location.assign(data.url);
+    },
+    onError: (err: unknown) => {
+      toast.error(err instanceof Error ? err.message : "Could not start YouTube authorization");
     },
   });
 
@@ -110,14 +116,10 @@ function SettingsPage() {
           <p className="text-xs uppercase tracking-wide text-muted-foreground">Settings</p>
           <h1 className="font-display text-2xl font-semibold md:text-3xl">Preferences & connections</h1>
         </div>
-        <Link
-          to="/diagnostics"
-          className="inline-flex items-center gap-1.5 rounded-full border border-border px-3 py-1.5 text-xs"
-        >
+        <Link to="/diagnostics" className="inline-flex items-center gap-1.5 rounded-full border border-border px-3 py-1.5 text-xs">
           <Activity size={12} /> Diagnostics
         </Link>
       </div>
-
 
       <GradientCard>
         <div className="flex items-start gap-3">
@@ -129,23 +131,38 @@ function SettingsPage() {
             {conn ? (
               <>
                 <p className="mt-1 text-sm text-muted-foreground">{conn.channel_title}</p>
-                <button
-                  onClick={() => disconnect.mutate()}
-                  className="mt-3 rounded-full border border-destructive/40 bg-destructive/10 px-3 py-1.5 text-xs text-destructive"
-                >
-                  Disconnect
-                </button>
+                <p className={`mt-1 text-xs ${yt.data.ready ? "text-success" : "text-warning"}`}>
+                  {yt.data.ready
+                    ? "Ready. Newly generated clips will be uploaded automatically as Unlisted."
+                    : "Authorization expired. Reconnect before generating new clips."}
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {!yt.data.ready ? (
+                    <button
+                      onClick={() => connect.mutate()}
+                      disabled={connect.isPending}
+                      className="inline-flex items-center gap-1.5 rounded-full bg-gradient-brand px-3 py-1.5 text-xs font-semibold text-primary-foreground shadow-glow disabled:opacity-60"
+                    >
+                      {connect.isPending ? <Loader2 size={12} className="animate-spin" /> : <PlugZap size={12} />}
+                      Reconnect YouTube
+                    </button>
+                  ) : null}
+                  <button
+                    onClick={() => disconnect.mutate()}
+                    className="rounded-full border border-destructive/40 bg-destructive/10 px-3 py-1.5 text-xs text-destructive"
+                  >
+                    Disconnect
+                  </button>
+                </div>
               </>
             ) : (
               <>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  {yt.data.oauthConfigured
-                    ? "Connect your Google account to enable real uploads to your YouTube channel."
-                    : "Google OAuth credentials not configured on the server. Ask an admin to set GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET."}
+                  Connect Google once to grant YouTube upload permission. ClipForge will then upload newly generated clips automatically as Unlisted.
                 </p>
                 <button
                   onClick={() => connect.mutate()}
-                  disabled={!yt.data.oauthConfigured || connect.isPending}
+                  disabled={connect.isPending}
                   className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-gradient-brand px-3 py-1.5 text-xs font-semibold text-primary-foreground shadow-glow disabled:opacity-60"
                 >
                   {connect.isPending ? <Loader2 size={12} className="animate-spin" /> : <PlugZap size={12} />}
@@ -163,10 +180,9 @@ function SettingsPage() {
             <Sparkles size={18} className="text-brand-purple" />
           </div>
           <div className="flex-1">
-            <p className="font-semibold">AI provider</p>
+            <p className="font-semibold">Highlight engine</p>
             <p className="mt-1 text-sm text-muted-foreground">
-              Powered by Lovable AI Gateway — no API keys needed. Titles, descriptions, and hashtags are generated
-              through the built-in provider.
+              Uses the configured AI scorer when available, with a deterministic fallback so generation does not fail just because an AI gateway is unavailable.
             </p>
           </div>
         </div>
@@ -178,31 +194,23 @@ function SettingsPage() {
             <Mic size={18} className="text-brand-purple" />
           </div>
           <div className="flex-1">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="font-semibold">Whisper provider</p>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Speech-to-text used during clip generation. Auto tries Groq → OpenAI → OpenRouter and
-                  falls back automatically on rate limits, timeouts, or insufficient balance.
-                </p>
-              </div>
-            </div>
+            <p className="font-semibold">Whisper provider</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Auto tries Groq → OpenAI → OpenRouter. If every provider is unavailable, ClipForge falls back to subtitle-free clip selection instead of killing the whole job.
+            </p>
 
             {whisper.isLoading ? (
               <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
                 <Loader2 size={12} className="animate-spin" /> Loading provider settings…
               </div>
             ) : !whisper.data?.configured ? (
-              <p className="mt-3 text-xs text-destructive">
-                Backend worker is not reachable. Check CLIPFORGE_BACKEND_URL.
-              </p>
+              <p className="mt-3 text-xs text-destructive">Render worker is not reachable.</p>
             ) : (
               <>
                 <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
                   {(["auto", "groq", "openai", "openrouter"] as WhisperProvider[]).map((p) => {
                     const active = whisper.data!.provider === p;
-                    const disabled =
-                      p !== "auto" && !whisper.data!.available[p as "groq" | "openai" | "openrouter"];
+                    const disabled = p !== "auto" && !whisper.data!.available[p as "groq" | "openai" | "openrouter"];
                     return (
                       <button
                         key={p}
@@ -222,18 +230,10 @@ function SettingsPage() {
                 <div className="mt-3 space-y-1 text-xs text-muted-foreground">
                   <p>
                     Selected: <span className="font-semibold text-foreground">{whisper.data.provider}</span>
-                    {whisper.data.lastUsedProvider ? (
-                      <>
-                        {" · Last used: "}
-                        <span className="font-semibold text-brand-cyan">
-                          {whisper.data.lastUsedProvider}
-                        </span>
-                      </>
-                    ) : null}
+                    {whisper.data.lastUsedProvider ? <>{" · Last used: "}<span className="font-semibold text-brand-cyan">{whisper.data.lastUsedProvider}</span></> : null}
                   </p>
                   <p>
-                    Keys detected:{" "}
-                    {(["groq", "openai", "openrouter"] as const)
+                    Keys detected: {(["groq", "openai", "openrouter"] as const)
                       .map((k) => `${k}: ${whisper.data!.available[k] ? "✓" : "—"}`)
                       .join(" · ")}
                   </p>
@@ -244,13 +244,10 @@ function SettingsPage() {
         </div>
       </GradientCard>
 
-
       <GradientCard>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="grid size-11 place-items-center rounded-2xl bg-secondary">
-              <Bell size={18} />
-            </div>
+            <div className="grid size-11 place-items-center rounded-2xl bg-secondary"><Bell size={18} /></div>
             <div>
               <p className="font-semibold">Notifications</p>
               <p className="text-sm text-muted-foreground">Job status toasts</p>
@@ -269,8 +266,7 @@ function SettingsPage() {
         onClick={signOut}
         className="flex w-full items-center justify-center gap-2 rounded-2xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm font-semibold text-destructive"
       >
-        <LogOut size={16} />
-        Sign out
+        <LogOut size={16} /> Sign out
       </button>
     </div>
   );
