@@ -17,7 +17,7 @@ export const listUploads = createServerFn({ method: "GET" })
   .handler(async ({ context }) => {
     const { data, error } = await context.supabase
       .from("clipforge_uploads")
-      .select("*, clipforge_clips(title, thumbnail_url, duration_s)")
+      .select("*, clips:clipforge_clips(title, thumbnail_url, duration_s)")
       .order("created_at", { ascending: false })
       .limit(100);
     if (error) throw new Error(error.message);
@@ -44,9 +44,7 @@ export const uploadToYouTube = createServerFn({ method: "POST" })
     const oauthConfigured = Boolean(process.env.GOOGLE_OAUTH_CLIENT_ID && process.env.GOOGLE_OAUTH_CLIENT_SECRET);
 
     if (!yt) {
-      if (oauthConfigured) {
-        throw new Error("YouTube not connected. Connect your channel in Settings before uploading.");
-      }
+      if (oauthConfigured) throw new Error("YouTube not connected. Connect your channel in Settings before uploading.");
       const simulatedId = `sim_${crypto.randomUUID().slice(0, 11)}`;
       const { data: upload, error } = await context.supabase
         .from("clipforge_uploads")
@@ -69,9 +67,7 @@ export const uploadToYouTube = createServerFn({ method: "POST" })
       return { ok: true as const, uploadId: upload.id, simulated: true, videoId: simulatedId };
     }
 
-    if (!clip.video_url) {
-      throw new Error("Clip has no rendered video yet. Wait for the render pipeline to finish.");
-    }
+    if (!clip.video_url) throw new Error("Clip has no rendered video yet. Wait for the render pipeline to finish.");
 
     const { ensureFreshAccessToken } = await import("./youtube.server");
     const fresh = await ensureFreshAccessToken({
@@ -116,31 +112,26 @@ export const uploadToYouTube = createServerFn({ method: "POST" })
       off += p.byteLength;
     }
 
-    const res = await fetch(
-      "https://www.googleapis.com/upload/youtube/v3/videos?part=snippet,status&uploadType=multipart",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${fresh.accessToken}`,
-          "Content-Type": `multipart/related; boundary=${boundary}`,
-        },
-        body,
+    const res = await fetch("https://www.googleapis.com/upload/youtube/v3/videos?part=snippet,status&uploadType=multipart", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${fresh.accessToken}`,
+        "Content-Type": `multipart/related; boundary=${boundary}`,
       },
-    );
+      body,
+    });
 
     if (!res.ok) {
       const errText = await res.text();
-      await context.supabase
-        .from("clipforge_uploads")
-        .insert({
-          clip_id: clip.id,
-          user_id: context.userId,
-          visibility: data.visibility,
-          status: "failed",
-          error_message: errText.slice(0, 500),
-          title: data.title,
-          description: data.description,
-        });
+      await context.supabase.from("clipforge_uploads").insert({
+        clip_id: clip.id,
+        user_id: context.userId,
+        visibility: data.visibility,
+        status: "failed",
+        error_message: errText.slice(0, 500),
+        title: data.title,
+        description: data.description,
+      });
       throw new Error(`YouTube upload failed: ${errText.slice(0, 200)}`);
     }
 
