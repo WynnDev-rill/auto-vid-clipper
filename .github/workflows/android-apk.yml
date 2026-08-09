@@ -2,6 +2,14 @@ name: Build ClipForge APK
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "clip icon.png"
+      - "capacitor.config.json"
+      - "native-shell/**"
+      - ".github/workflows/android-apk.yml"
   push:
     branches:
       - main
