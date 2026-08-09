@@ -5,7 +5,7 @@ import { Youtube, LogOut, Bell, Sparkles, Loader2, PlugZap, Activity, Mic } from
 import { toast } from "sonner";
 import { GradientCard } from "@/components/gradient-card";
 import { getYouTubeConnection, disconnectYouTube } from "@/lib/youtube.functions";
-import { YOUTUBE_PROVIDER_SCOPES } from "@/lib/youtube-provider.client";
+import { YOUTUBE_PROVIDER_SCOPES } from "@/lib/youtube-provider";
 import { getSettings, updateSettings } from "@/lib/analytics.functions";
 import {
   getWhisperProviderInfo,
