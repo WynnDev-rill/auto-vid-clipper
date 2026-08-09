@@ -7,10 +7,10 @@ export const getAnalytics = createServerFn({ method: "GET" })
   .handler(async ({ context }) => {
     const [{ count: totalJobs }, { count: doneJobs }, { count: totalClips }, uploadsRes] =
       await Promise.all([
-        context.supabase.from("jobs").select("id", { count: "exact", head: true }),
-        context.supabase.from("jobs").select("id", { count: "exact", head: true }).eq("status", "done"),
-        context.supabase.from("clips").select("id", { count: "exact", head: true }),
-        context.supabase.from("uploads").select("status, created_at"),
+        context.supabase.from("clipforge_jobs").select("id", { count: "exact", head: true }),
+        context.supabase.from("clipforge_jobs").select("id", { count: "exact", head: true }).eq("status", "done"),
+        context.supabase.from("clipforge_clips").select("id", { count: "exact", head: true }),
+        context.supabase.from("clipforge_uploads").select("status, created_at"),
       ]);
 
     const uploads = uploadsRes.data ?? [];
@@ -19,7 +19,6 @@ export const getAnalytics = createServerFn({ method: "GET" })
     const total = uploads.length;
     const successRate = total ? Math.round((uploaded / total) * 100) : 0;
 
-    // Group last 7 days
     const now = new Date();
     const days: Array<{ day: string; count: number }> = [];
     for (let i = 6; i >= 0; i--) {
@@ -49,7 +48,7 @@ export const getSettings = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }) => {
     const { data } = await context.supabase
-      .from("user_settings")
+      .from("clipforge_user_settings")
       .select("*")
       .eq("user_id", context.userId)
       .maybeSingle();
@@ -59,16 +58,14 @@ export const getSettings = createServerFn({ method: "GET" })
 export const updateSettings = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) =>
-    z
-      .object({
-        theme: z.enum(["dark", "light"]).optional(),
-        notifications_enabled: z.boolean().optional(),
-      })
-      .parse(d),
+    z.object({
+      theme: z.enum(["dark", "light"]).optional(),
+      notifications_enabled: z.boolean().optional(),
+    }).parse(d),
   )
   .handler(async ({ data, context }) => {
     const { error } = await context.supabase
-      .from("user_settings")
+      .from("clipforge_user_settings")
       .upsert({ user_id: context.userId, ...data });
     if (error) throw new Error(error.message);
     return { ok: true };
