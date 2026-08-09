@@ -1,0 +1,93 @@
+name: Build ClipForge APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "clip icon.png"
+      - "capacitor.config.json"
+      - "native-shell/**"
+      - ".github/workflows/android-apk.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: clipforge-android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-apk:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install Capacitor build tools
+        run: |
+          npm install --legacy-peer-deps --no-save --package-lock=false \
+            @capacitor/core@8.4.2 \
+            @capacitor/android@8.4.2 \
+            @capacitor/cli@8.4.2 \
+            @capacitor/assets@3.0.5
+
+      - name: Create Android project
+        run: |
+          rm -rf android assets
+          mkdir -p assets
+          cp "clip icon.png" assets/icon.png
+          npx cap add android
+          npx cap sync android
+
+      - name: Generate ClipForge launcher icon and splash assets
+        run: |
+          npx @capacitor/assets generate --android \
+            --iconBackgroundColor '#0b1026' \
+            --iconBackgroundColorDark '#0b1026' \
+            --splashBackgroundColor '#0b1026' \
+            --splashBackgroundColorDark '#0b1026'
+
+      - name: Set Android version metadata
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          build_file = Path("android/app/build.gradle")
+          text = build_file.read_text()
+          text = text.replace('versionName "1.0"', 'versionName "1.0.0"')
+          build_file.write_text(text)
+          PY
+
+      - name: Build installable APK
+        run: |
+          chmod +x android/gradlew
+          cd android
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Prepare clean APK filename
+        run: |
+          cp android/app/build/outputs/apk/debug/app-debug.apk ClipForge-v1.0.0.apk
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClipForge-v1.0.0
+          path: ClipForge-v1.0.0.apk
+          if-no-files-found: error
+          retention-days: 30
