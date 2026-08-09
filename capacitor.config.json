@@ -5,5 +5,16 @@
   "server": {
     "url": "https://auto-vid-clipper.vercel.app",
     "cleartext": false
+  },
+  "plugins": {
+    "SystemBars": {
+      "insetsHandling": "css",
+      "style": "DARK",
+      "hidden": false,
+      "animation": "NONE"
+    },
+    "App": {
+      "disableBackButtonHandler": false
+    }
   }
 }

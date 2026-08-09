@@ -7,16 +7,20 @@ on:
       - main
     paths:
       - "clip icon.png"
+      - "native-android/**"
       - "capacitor.config.json"
       - "native-shell/**"
+      - "src/styles.css"
       - ".github/workflows/android-apk.yml"
   push:
     branches:
       - main
     paths:
       - "clip icon.png"
+      - "native-android/**"
       - "capacitor.config.json"
       - "native-shell/**"
+      - "src/styles.css"
       - ".github/workflows/android-apk.yml"
 
 permissions:
@@ -53,32 +57,37 @@ jobs:
             @capacitor/core@8.4.2 \
             @capacitor/android@8.4.2 \
             @capacitor/cli@8.4.2 \
+            @capacitor/app@8.0.0 \
             @capacitor/assets@3.0.5
 
       - name: Create Android project
         run: |
           rm -rf android assets
           mkdir -p assets
-          cp "clip icon.png" assets/icon.png
+          cp native-android/clipforge-icon.svg assets/icon.svg
           npx cap add android
           npx cap sync android
 
-      - name: Generate ClipForge launcher icon and splash assets
+      - name: Generate native adaptive icon and splash assets
         run: |
           npx @capacitor/assets generate --android \
-            --iconBackgroundColor '#0b1026' \
-            --iconBackgroundColorDark '#0b1026' \
+            --iconBackgroundColor '#11183b' \
+            --iconBackgroundColorDark '#11183b' \
             --splashBackgroundColor '#0b1026' \
             --splashBackgroundColorDark '#0b1026'
+          test -f android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
+          test -f android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
 
       - name: Set Android version metadata
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
           build_file = Path("android/app/build.gradle")
           text = build_file.read_text()
-          text = text.replace('versionName "1.0"', 'versionName "1.0.0"')
+          text = re.sub(r'versionCode\s+\d+', 'versionCode 2', text)
+          text = re.sub(r'versionName\s+"[^"]+"', 'versionName "1.0.1"', text)
           build_file.write_text(text)
           PY
 
@@ -90,12 +99,12 @@ jobs:
 
       - name: Prepare clean APK filename
         run: |
-          cp android/app/build/outputs/apk/debug/app-debug.apk ClipForge-v1.0.0.apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk ClipForge-v1.0.1.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ClipForge-v1.0.0
-          path: ClipForge-v1.0.0.apk
+          name: ClipForge-v1.0.1
+          path: ClipForge-v1.0.1.apk
           if-no-files-found: error
           retention-days: 30

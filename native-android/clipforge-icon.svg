@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="brand" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#a855f7"/>
+      <stop offset="0.52" stop-color="#6366f1"/>
+      <stop offset="1" stop-color="#22d3ee"/>
+    </linearGradient>
+    <linearGradient id="play" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#c084fc"/>
+      <stop offset="1" stop-color="#3b82f6"/>
+    </linearGradient>
+  </defs>
+  <!-- Keep the mark inside Android's adaptive-icon safe zone. -->
+  <g transform="translate(112 112)">
+    <rect x="326" y="245" width="365" height="315" rx="68" fill="none" stroke="url(#brand)" stroke-width="48"/>
+    <rect x="643" y="300" width="28" height="48" rx="11" fill="#8b5cf6"/>
+    <rect x="643" y="383" width="28" height="48" rx="11" fill="#6366f1"/>
+    <rect x="643" y="466" width="28" height="48" rx="11" fill="#22d3ee"/>
+    <path d="M463 347 L463 477 L570 412 Z" fill="url(#play)"/>
+
+    <path d="M287 491 L456 180" fill="none" stroke="#f8f7ff" stroke-width="50" stroke-linecap="round"/>
+    <path d="M286 354 L463 578" fill="none" stroke="#ded9ff" stroke-width="50" stroke-linecap="round"/>
+    <circle cx="225" cy="346" r="72" fill="#f8f7ff"/>
+    <circle cx="225" cy="346" r="34" fill="#11183b"/>
+    <circle cx="257" cy="552" r="72" fill="#f8f7ff"/>
+    <circle cx="257" cy="552" r="34" fill="#11183b"/>
+    <circle cx="342" cy="431" r="25" fill="#11183b"/>
+
+    <path d="M582 173 L600 216 L643 234 L600 252 L582 295 L564 252 L521 234 L564 216 Z" fill="#c084fc"/>
+    <path d="M675 205 L685 229 L709 239 L685 249 L675 273 L665 249 L641 239 L665 229 Z" fill="#67e8f9"/>
+  </g>
+</svg>
