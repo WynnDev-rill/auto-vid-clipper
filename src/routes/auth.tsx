@@ -5,6 +5,7 @@ import { motion } from "framer-motion";
 import { toast } from "sonner";
 import { Mail, Lock, Loader2, Smartphone } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
+import { persistYouTubeProviderSession } from "@/lib/youtube-provider.client";
 import { Logo } from "@/components/logo";
 
 declare global {
@@ -13,14 +14,15 @@ declare global {
   }
 }
 
+const stringFlag = z.preprocess(
+  (value) => (value == null ? undefined : String(value)),
+  z.string().optional(),
+);
+
 const searchSchema = z.object({
   redirect: z.string().optional(),
-  // TanStack's default search parser may deserialize `native=1` to the number 1.
-  // Normalize it before validation so the OAuth callback cannot 500 during SSR.
-  native: z.preprocess(
-    (value) => (value == null ? undefined : String(value)),
-    z.string().optional(),
-  ),
+  native: stringFlag,
+  youtube: stringFlag,
   code: z.string().optional(),
   error: z.string().optional(),
   error_description: z.string().optional(),
@@ -41,15 +43,16 @@ function safeRedirect(value?: string) {
   return value?.startsWith("/") && !value.startsWith("//") ? value : "/dashboard";
 }
 
-function isNativeCallback(value?: string) {
+function isFlag(value?: string) {
   return value === "1" || value === "true";
 }
 
-function nativeCallbackLinks(code: string, destination: string) {
-  const query = `code=${encodeURIComponent(code)}&redirect=${encodeURIComponent(destination)}`;
+function nativeCallbackLinks(code: string, destination: string, youtube: boolean) {
+  const query =
+    `code=${encodeURIComponent(code)}&redirect=${encodeURIComponent(destination)}` +
+    (youtube ? "&youtube=1" : "");
   return {
     deepLink: `com.wynndev.clipforge://auth/callback?${query}`,
-    // Chrome for Android handles intent:// more reliably for automatic app returns.
     intentLink:
       `intent://auth/callback?${query}` +
       `#Intent;scheme=com.wynndev.clipforge;package=com.wynndev.clipforge;end`,
@@ -66,6 +69,7 @@ function AuthPage() {
   const [checked, setChecked] = useState(false);
   const [nativeReturning, setNativeReturning] = useState(false);
   const destination = safeRedirect(search.redirect);
+  const youtubeConnect = isFlag(search.youtube);
   const isNativeShell = useMemo(
     () => typeof navigator !== "undefined" && /(?:^|\s)ClipForge\//.test(navigator.userAgent),
     [],
@@ -82,24 +86,19 @@ function AuthPage() {
         return;
       }
 
-      // The verifier lives inside the APK WebView. The browser must only return
-      // the authorization code to Android, not exchange it itself.
-      if (isNativeCallback(search.native) && search.code) {
+      // PKCE verifier lives in the APK WebView. The external browser only
+      // returns the code, then Android hands it to the existing app task.
+      if (isFlag(search.native) && search.code) {
         setChecked(true);
         setNativeReturning(true);
-        const { intentLink } = nativeCallbackLinks(search.code, destination);
-
-        // Deliberately not instant: let the success page settle before bringing
-        // the existing ClipForge task back to the foreground.
-        timer = window.setTimeout(() => {
-          window.location.replace(intentLink);
-        }, 1600);
+        const { intentLink } = nativeCallbackLinks(search.code, destination, youtubeConnect);
+        timer = window.setTimeout(() => window.location.replace(intentLink), 1600);
         return;
       }
 
       if (search.code) {
         setLoading(true);
-        const { error } = await supabase.auth.exchangeCodeForSession(search.code);
+        const { data, error } = await supabase.auth.exchangeCodeForSession(search.code);
         if (cancelled) return;
         if (error) {
           toast.error(error.message);
@@ -107,7 +106,11 @@ function AuthPage() {
           setChecked(true);
           return;
         }
-        window.setTimeout(() => navigate({ to: destination, replace: true }), 250);
+        if (youtubeConnect && data.session) {
+          await persistYouTubeProviderSession(data.session);
+          toast.success("YouTube connected");
+        }
+        window.setTimeout(() => navigate({ to: destination, replace: true }), 300);
         return;
       }
 
@@ -117,12 +120,16 @@ function AuthPage() {
       else setChecked(true);
     }
 
-    void finishCallback();
+    void finishCallback().catch((err) => {
+      toast.error(err instanceof Error ? err.message : "Could not finish Google authorization");
+      setLoading(false);
+      setChecked(true);
+    });
     return () => {
       cancelled = true;
       if (timer) window.clearTimeout(timer);
     };
-  }, [destination, navigate, search.code, search.error, search.error_description, search.native]);
+  }, [destination, navigate, search.code, search.error, search.error_description, search.native, youtubeConnect]);
 
   async function handleGoogle() {
     setLoading(true);
@@ -146,7 +153,6 @@ function AuthPage() {
         setLoading(false);
         return;
       }
-
       window.location.assign(data.url);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Google sign-in failed");
@@ -184,22 +190,17 @@ function AuthPage() {
   if (!checked) return null;
 
   if (nativeReturning) {
-    const { deepLink } = nativeCallbackLinks(search.code ?? "", destination);
+    const { deepLink } = nativeCallbackLinks(search.code ?? "", destination, youtubeConnect);
     return (
       <div className="flex min-h-screen items-center justify-center px-5 py-10">
         <div className="card-elevated w-full max-w-sm p-7 text-center">
           <div className="mx-auto grid size-14 place-items-center rounded-2xl bg-gradient-brand shadow-glow">
             <Smartphone size={24} />
           </div>
-          <h1 className="mt-5 text-xl font-semibold">Login berhasil</h1>
-          <p className="mt-2 text-sm text-muted-foreground">
-            Mengembalikanmu ke ClipForge…
-          </p>
+          <h1 className="mt-5 text-xl font-semibold">{youtubeConnect ? "YouTube diizinkan" : "Login berhasil"}</h1>
+          <p className="mt-2 text-sm text-muted-foreground">Mengembalikanmu ke ClipForge…</p>
           <Loader2 className="mx-auto mt-5 animate-spin text-brand-purple" />
-          <a
-            href={deepLink}
-            className="mt-6 inline-flex rounded-2xl border border-border px-4 py-2.5 text-sm font-medium"
-          >
+          <a href={deepLink} className="mt-6 inline-flex rounded-2xl border border-border px-4 py-2.5 text-sm font-medium">
             Kembali ke ClipForge
           </a>
         </div>
