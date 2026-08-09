@@ -1,12 +1,13 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import { CLIPFORGE_SUPABASE_URL } from "@/integrations/supabase/config";
 
 export const getDiagnostics = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }) => {
     const env = {
-      SUPABASE_URL: Boolean(process.env.SUPABASE_URL),
-      SUPABASE_PUBLISHABLE_KEY: Boolean(process.env.SUPABASE_PUBLISHABLE_KEY),
+      SUPABASE_URL: true,
+      SUPABASE_PUBLISHABLE_KEY: true,
       SUPABASE_SERVICE_ROLE_KEY: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY),
       GOOGLE_OAUTH_CLIENT_ID: Boolean(process.env.GOOGLE_OAUTH_CLIENT_ID),
       GOOGLE_OAUTH_CLIENT_SECRET: Boolean(process.env.GOOGLE_OAUTH_CLIENT_SECRET),
@@ -21,14 +22,12 @@ export const getDiagnostics = createServerFn({ method: "GET" })
       : null;
     const backendUrl = process.env.CLIPFORGE_BACKEND_URL ?? null;
 
-    // Read the row via user's RLS-scoped client
     const { data: connRls, error: rlsErr } = await context.supabase
-      .from("youtube_connections")
+      .from("clipforge_youtube_connections")
       .select("channel_id, channel_title, scopes, access_token_expires_at, created_at, updated_at")
       .eq("user_id", context.userId)
       .maybeSingle();
 
-    // Cross-check via service-role (bypasses RLS) to detect RLS mismatches
     let adminRow: null | {
       channel_id: string | null;
       channel_title: string | null;
@@ -36,20 +35,21 @@ export const getDiagnostics = createServerFn({ method: "GET" })
       updated_at: string;
     } = null;
     let adminErr: string | null = null;
-    try {
-      const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-      const { data, error } = await supabaseAdmin
-        .from("youtube_connections")
-        .select("channel_id, channel_title, created_at, updated_at")
-        .eq("user_id", context.userId)
-        .maybeSingle();
-      if (error) adminErr = error.message;
-      adminRow = data ?? null;
-    } catch (e) {
-      adminErr = e instanceof Error ? e.message : "admin_client_error";
+    if (env.SUPABASE_SERVICE_ROLE_KEY) {
+      try {
+        const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+        const { data, error } = await supabaseAdmin
+          .from("clipforge_youtube_connections")
+          .select("channel_id, channel_title, created_at, updated_at")
+          .eq("user_id", context.userId)
+          .maybeSingle();
+        if (error) adminErr = error.message;
+        adminRow = data ?? null;
+      } catch (e) {
+        adminErr = e instanceof Error ? e.message : "admin_client_error";
+      }
     }
 
-    // Live probe: hit YouTube API with a fresh access token
     let apiProbe:
       | { ok: true; channelId: string; channelTitle: string; refreshed: boolean }
       | { ok: false; error: string }
@@ -58,7 +58,7 @@ export const getDiagnostics = createServerFn({ method: "GET" })
     if (connRls) {
       try {
         const { data: full } = await context.supabase
-          .from("youtube_connections")
+          .from("clipforge_youtube_connections")
           .select("access_token, access_token_expires_at, refresh_token_ciphertext")
           .eq("user_id", context.userId)
           .maybeSingle();
@@ -71,11 +71,8 @@ export const getDiagnostics = createServerFn({ method: "GET" })
         });
         if (fresh.refreshed) {
           await context.supabase
-            .from("youtube_connections")
-            .update({
-              access_token: fresh.accessToken,
-              access_token_expires_at: fresh.expiresAt,
-            })
+            .from("clipforge_youtube_connections")
+            .update({ access_token: fresh.accessToken, access_token_expires_at: fresh.expiresAt })
             .eq("user_id", context.userId);
         }
         const ch = await getMyChannel(fresh.accessToken);
@@ -87,6 +84,7 @@ export const getDiagnostics = createServerFn({ method: "GET" })
 
     return {
       env,
+      supabaseUrl: CLIPFORGE_SUPABASE_URL,
       clientIdMasked,
       backendUrl,
       userId: context.userId,
