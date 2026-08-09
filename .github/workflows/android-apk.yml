@@ -59,6 +59,9 @@ jobs:
             @capacitor/cli@8.4.2 \
             @capacitor/app@8.0.0 \
             @capacitor/assets@3.0.5
+          # Capacitor discovers native plugins from package.json. Keep this CI-only
+          # dependency registration so the App plugin is actually bundled.
+          npm pkg set "dependencies.@capacitor/app=8.0.0"
 
       - name: Create Android project
         run: |
@@ -67,6 +70,15 @@ jobs:
           cp native-android/clipforge-icon.svg assets/icon.svg
           npx cap add android
           npx cap sync android
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          plugins_path = Path("android/app/src/main/assets/capacitor.plugins.json")
+          plugins = json.loads(plugins_path.read_text())
+          assert any(plugin.get("pkg") == "@capacitor/app" for plugin in plugins), plugins
+          print("Verified native @capacitor/app plugin:", plugins)
+          PY
 
       - name: Generate native adaptive icon and splash assets
         run: |
