@@ -15,7 +15,12 @@ declare global {
 
 const searchSchema = z.object({
   redirect: z.string().optional(),
-  native: z.string().optional(),
+  // TanStack's default search parser may deserialize `native=1` to the number 1.
+  // Normalize it before validation so the OAuth callback cannot 500 during SSR.
+  native: z.preprocess(
+    (value) => (value == null ? undefined : String(value)),
+    z.string().optional(),
+  ),
   code: z.string().optional(),
   error: z.string().optional(),
   error_description: z.string().optional(),
@@ -34,6 +39,21 @@ export const Route = createFileRoute("/auth")({
 
 function safeRedirect(value?: string) {
   return value?.startsWith("/") && !value.startsWith("//") ? value : "/dashboard";
+}
+
+function isNativeCallback(value?: string) {
+  return value === "1" || value === "true";
+}
+
+function nativeCallbackLinks(code: string, destination: string) {
+  const query = `code=${encodeURIComponent(code)}&redirect=${encodeURIComponent(destination)}`;
+  return {
+    deepLink: `com.wynndev.clipforge://auth/callback?${query}`,
+    // Chrome for Android handles intent:// more reliably for automatic app returns.
+    intentLink:
+      `intent://auth/callback?${query}` +
+      `#Intent;scheme=com.wynndev.clipforge;package=com.wynndev.clipforge;end`,
+  };
 }
 
 function AuthPage() {
@@ -62,16 +82,18 @@ function AuthPage() {
         return;
       }
 
-      // The external browser must not exchange a native PKCE code. The verifier
-      // lives inside the APK WebView. Return the code to the app after a short,
-      // deliberate delay so Android has time to foreground the existing task.
-      if (search.native === "1" && search.code) {
+      // The verifier lives inside the APK WebView. The browser must only return
+      // the authorization code to Android, not exchange it itself.
+      if (isNativeCallback(search.native) && search.code) {
         setChecked(true);
         setNativeReturning(true);
-        const deepLink =
-          `com.wynndev.clipforge://auth/callback?code=${encodeURIComponent(search.code)}` +
-          `&redirect=${encodeURIComponent(destination)}`;
-        timer = window.setTimeout(() => window.location.assign(deepLink), 1400);
+        const { intentLink } = nativeCallbackLinks(search.code, destination);
+
+        // Deliberately not instant: let the success page settle before bringing
+        // the existing ClipForge task back to the foreground.
+        timer = window.setTimeout(() => {
+          window.location.replace(intentLink);
+        }, 1600);
         return;
       }
 
@@ -162,9 +184,7 @@ function AuthPage() {
   if (!checked) return null;
 
   if (nativeReturning) {
-    const deepLink =
-      `com.wynndev.clipforge://auth/callback?code=${encodeURIComponent(search.code ?? "")}` +
-      `&redirect=${encodeURIComponent(destination)}`;
+    const { deepLink } = nativeCallbackLinks(search.code ?? "", destination);
     return (
       <div className="flex min-h-screen items-center justify-center px-5 py-10">
         <div className="card-elevated w-full max-w-sm p-7 text-center">
