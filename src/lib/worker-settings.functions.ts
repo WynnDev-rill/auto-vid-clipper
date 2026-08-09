@@ -13,26 +13,26 @@ export type WhisperProviderInfo = {
   autoOrder: Array<"groq" | "openai" | "openrouter">;
 };
 
-async function callBackend(pathname: string, init?: RequestInit) {
-  const url = process.env.CLIPFORGE_BACKEND_URL;
-  const secret = process.env.CLIPFORGE_BACKEND_SECRET;
-  if (!url) return null;
+const DEFAULT_BACKEND_URL = "https://auto-vid-clipper.onrender.com";
+
+async function callBackend(pathname: string, accessToken: string, init?: RequestInit) {
+  const url = process.env.CLIPFORGE_BACKEND_URL || DEFAULT_BACKEND_URL;
   const res = await fetch(`${url.replace(/\/$/, "")}${pathname}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
-      ...(secret ? { Authorization: `Bearer ${secret}` } : {}),
+      Authorization: `Bearer ${accessToken}`,
       ...(init?.headers ?? {}),
     },
-    signal: AbortSignal.timeout(15_000),
+    signal: AbortSignal.timeout(30_000),
   });
-  if (!res.ok) throw new Error(`Backend ${pathname} failed: ${await res.text()}`);
+  if (!res.ok) throw new Error(`Backend ${pathname} failed (${res.status}): ${await res.text()}`);
   return res.json();
 }
 
 export const getWhisperProviderInfo = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
-  .handler(async (): Promise<WhisperProviderInfo> => {
+  .handler(async ({ context }): Promise<WhisperProviderInfo> => {
     const empty: WhisperProviderInfo = {
       configured: false,
       provider: "auto",
@@ -42,8 +42,7 @@ export const getWhisperProviderInfo = createServerFn({ method: "GET" })
       autoOrder: ["groq", "openai", "openrouter"],
     };
     try {
-      const data = await callBackend("/settings/whisper-provider");
-      if (!data) return empty;
+      const data = await callBackend("/settings/whisper-provider", context.accessToken);
       return { ...empty, configured: true, ...data };
     } catch (err) {
       console.error("[getWhisperProviderInfo] failed:", err);
@@ -56,11 +55,10 @@ export const setWhisperProviderPreference = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) =>
     z.object({ provider: z.enum(["auto", "groq", "openai", "openrouter"]) }).parse(d),
   )
-  .handler(async ({ data }): Promise<{ ok: boolean; provider: WhisperProvider }> => {
-    const result = await callBackend("/settings/whisper-provider", {
+  .handler(async ({ data, context }): Promise<{ ok: boolean; provider: WhisperProvider }> => {
+    const result = await callBackend("/settings/whisper-provider", context.accessToken, {
       method: "POST",
       body: JSON.stringify({ provider: data.provider }),
     });
-    if (!result) throw new Error("Backend worker is not configured (CLIPFORGE_BACKEND_URL missing)");
     return { ok: true, provider: result.provider as WhisperProvider };
   });
