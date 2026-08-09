@@ -66,7 +66,7 @@ public class MainActivity extends BridgeActivity {
         String ua = webView.getSettings().getUserAgentString();
         if (ua == null) ua = "";
         if (!ua.contains("ClipForge/")) {
-            webView.getSettings().setUserAgentString(ua + " ClipForge/1.1.1");
+            webView.getSettings().setUserAgentString(ua + " ClipForge/1.1.2");
         }
         webView.addJavascriptInterface(new ClipForgeNativeBridge(), "ClipForgeNative");
         handleAuthIntent(getIntent());
@@ -189,9 +189,6 @@ if (fs.existsSync(stylesPath)) {
   const styles = addItemsToStyles(fs.readFileSync(stylesPath, 'utf8'), barItems);
   fs.writeFileSync(stylesPath, styles);
 
-  // Android 15+ enforces edge-to-edge for newer targets. Keep the system bars
-  // visually separate like a native app, and retain the WebView inset listener
-  // above as a second line of defense on OEM builds.
   fs.mkdirSync(path.dirname(stylesV35Path), { recursive: true });
   const v35 = addItemsToStyles(styles, [['android:windowOptOutEdgeToEdgeEnforcement', 'true']]);
   fs.writeFileSync(stylesV35Path, v35);

@@ -19,7 +19,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CLIPFORGE_VERSION_NAME: "1.1.1"
+  CLIPFORGE_VERSION_NAME: "1.1.2"
   CLIPFORGE_KEY_ALIAS: "clipforge"
   CLIPFORGE_KEYSTORE_PASSWORD: "enZBtxGNZSgtMJixzf49GIUuMZ1rHltX"
   GRADLE_OPTS: "-Dorg.gradle.caching=true -Dorg.gradle.parallel=true"
