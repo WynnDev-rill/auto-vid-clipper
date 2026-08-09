@@ -3,7 +3,7 @@
   "appName": "ClipForge",
   "webDir": "native-shell",
   "android": {
-    "adjustMarginsForEdgeToEdge": "auto"
+    "adjustMarginsForEdgeToEdge": "force"
   },
   "server": {
     "url": "https://auto-vid-clipper.vercel.app",
