@@ -1,4 +1,4 @@
-// Server-only YouTube OAuth + Data API v3 helpers.
+// Server-only YouTube Data API helpers.
 import { decryptToken } from "./crypto.server";
 
 export const YOUTUBE_SCOPES = [
@@ -59,7 +59,9 @@ export async function exchangeCodeForTokens(code: string, redirectUri: string) {
 
 export async function refreshAccessToken(refreshToken: string) {
   const { clientId, clientSecret } = getYouTubeClientConfig();
-  if (!clientId || !clientSecret) throw new Error("Google OAuth client not configured");
+  if (!clientId || !clientSecret) {
+    throw new Error("YouTube authorization expired. Reconnect the YouTube channel in Settings.");
+  }
   const res = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -97,9 +99,14 @@ export async function ensureFreshAccessToken(row: {
 }) {
   const now = Date.now();
   const expiresAt = row.access_token_expires_at ? Date.parse(row.access_token_expires_at) : 0;
-  if (row.access_token && expiresAt - now > 60_000) {
+  if (row.access_token && expiresAt - now > 120_000) {
     return { accessToken: row.access_token, expiresAt: new Date(expiresAt).toISOString(), refreshed: false };
   }
+
+  if (row.refresh_token_ciphertext === "provider-refresh-not-stored") {
+    throw new Error("YouTube authorization expired. Reconnect the YouTube channel in Settings before generating or uploading.");
+  }
+
   const refreshToken = decryptToken(row.refresh_token_ciphertext);
   const fresh = await refreshAccessToken(refreshToken);
   const newExpiresAt = new Date(Date.now() + fresh.expires_in * 1000).toISOString();
