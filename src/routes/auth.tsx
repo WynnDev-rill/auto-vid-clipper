@@ -5,7 +5,7 @@ import { motion } from "framer-motion";
 import { toast } from "sonner";
 import { Mail, Lock, Loader2, Smartphone } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
-import { persistYouTubeProviderSession } from "@/lib/youtube-provider.client";
+import { persistYouTubeProviderSession } from "@/lib/youtube-provider";
 import { Logo } from "@/components/logo";
 
 declare global {
@@ -86,8 +86,6 @@ function AuthPage() {
         return;
       }
 
-      // PKCE verifier lives in the APK WebView. The external browser only
-      // returns the code, then Android hands it to the existing app task.
       if (isFlag(search.native) && search.code) {
         setChecked(true);
         setNativeReturning(true);
