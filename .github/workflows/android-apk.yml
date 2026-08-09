@@ -2,25 +2,13 @@ name: Build ClipForge APK
 
 on:
   workflow_dispatch:
-  pull_request:
-    branches: [main]
-    paths:
-      - "clip icon.png"
-      - "native-android/**"
-      - "capacitor.config.json"
-      - "native-shell/**"
-      - "scripts/configure-clipforge-android.mjs"
-      - "src/**"
-      - ".github/workflows/android-apk.yml"
   push:
     branches: [main]
     paths:
-      - "clip icon.png"
       - "native-android/**"
       - "capacitor.config.json"
       - "native-shell/**"
       - "scripts/configure-clipforge-android.mjs"
-      - "src/**"
       - ".github/workflows/android-apk.yml"
 
 permissions:
@@ -34,12 +22,13 @@ env:
   CLIPFORGE_VERSION_NAME: "1.1.0"
   CLIPFORGE_KEY_ALIAS: "clipforge"
   CLIPFORGE_KEYSTORE_PASSWORD: "enZBtxGNZSgtMJixzf49GIUuMZ1rHltX"
+  GRADLE_OPTS: "-Dorg.gradle.caching=true -Dorg.gradle.parallel=true"
 
 jobs:
   build-apk:
     name: Build signed Android APK
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 15
 
     steps:
       - name: Checkout repository
@@ -49,25 +38,25 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: npm
+          cache-dependency-path: package-lock.json
 
-      - name: Set up Java
+      - name: Set up Java and Gradle cache
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "21"
+          cache: gradle
 
       - name: Install Capacitor build tools
         run: |
-          npm install --legacy-peer-deps --no-save --package-lock=false \
+          npm install --legacy-peer-deps --no-save --package-lock=false --prefer-offline --no-audit --no-fund \
             @capacitor/core@8.4.2 \
             @capacitor/android@8.4.2 \
             @capacitor/cli@8.4.2 \
             @capacitor/app@8.0.0 \
             @capacitor/assets@3.0.5
           npm pkg set "dependencies.@capacitor/app=8.0.0"
-
-      - name: Validate web build
-        run: npm run build
 
       - name: Create Android project
         run: |
@@ -123,10 +112,12 @@ jobs:
           android.injected.signing.store.password=$CLIPFORGE_KEYSTORE_PASSWORD
           android.injected.signing.key.alias=$CLIPFORGE_KEY_ALIAS
           android.injected.signing.key.password=$CLIPFORGE_KEYSTORE_PASSWORD
+          org.gradle.caching=true
+          org.gradle.parallel=true
           EOF
           chmod +x android/gradlew
           cd android
-          ./gradlew assembleRelease --no-daemon
+          ./gradlew assembleRelease --no-daemon --build-cache --parallel
 
       - name: Verify APK signature and package
         run: |
