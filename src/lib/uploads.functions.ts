@@ -28,46 +28,22 @@ export const uploadToYouTube = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => UploadSchema.parse(d))
   .handler(async ({ data, context }) => {
-    const { data: clip } = await context.supabase
+    const { data: clip, error: clipError } = await context.supabase
       .from("clipforge_clips")
       .select("*")
       .eq("id", data.clipId)
       .maybeSingle();
+    if (clipError) throw new Error(clipError.message);
     if (!clip) throw new Error("Clip not found");
 
-    const { data: yt } = await context.supabase
+    const { data: yt, error: ytError } = await context.supabase
       .from("clipforge_youtube_connections")
       .select("*")
       .eq("user_id", context.userId)
       .maybeSingle();
-
-    const oauthConfigured = Boolean(process.env.GOOGLE_OAUTH_CLIENT_ID && process.env.GOOGLE_OAUTH_CLIENT_SECRET);
-
-    if (!yt) {
-      if (oauthConfigured) throw new Error("YouTube not connected. Connect your channel in Settings before uploading.");
-      const simulatedId = `sim_${crypto.randomUUID().slice(0, 11)}`;
-      const { data: upload, error } = await context.supabase
-        .from("clipforge_uploads")
-        .insert({
-          clip_id: clip.id,
-          user_id: context.userId,
-          youtube_video_id: simulatedId,
-          visibility: data.visibility,
-          scheduled_for: data.scheduledFor ?? null,
-          status: data.mode === "draft" ? "draft" : data.mode === "schedule" ? "scheduled" : "uploaded",
-          title: data.title,
-          description: data.description,
-          simulated: true,
-          uploaded_at: data.mode === "publish" ? new Date().toISOString() : null,
-        })
-        .select()
-        .single();
-      if (error) throw new Error(error.message);
-      await context.supabase.from("clipforge_clips").update({ status: "uploaded" }).eq("id", clip.id);
-      return { ok: true as const, uploadId: upload.id, simulated: true, videoId: simulatedId };
-    }
-
-    if (!clip.video_url) throw new Error("Clip has no rendered video yet. Wait for the render pipeline to finish.");
+    if (ytError) throw new Error(ytError.message);
+    if (!yt) throw new Error("YouTube is not connected. Connect your channel in Settings first.");
+    if (!clip.video_url) throw new Error("Clip has no rendered video yet. Wait for generation to finish.");
 
     const { ensureFreshAccessToken } = await import("./youtube.server");
     const fresh = await ensureFreshAccessToken({
@@ -82,8 +58,8 @@ export const uploadToYouTube = createServerFn({ method: "POST" })
         .eq("user_id", context.userId);
     }
 
-    const videoRes = await fetch(clip.video_url);
-    if (!videoRes.ok) throw new Error("Failed to fetch clip video");
+    const videoRes = await fetch(clip.video_url, { signal: AbortSignal.timeout(60_000) });
+    if (!videoRes.ok) throw new Error(`Failed to fetch rendered clip (${videoRes.status})`);
     const videoBuf = await videoRes.arrayBuffer();
 
     const metadata = {
@@ -107,9 +83,9 @@ export const uploadToYouTube = createServerFn({ method: "POST" })
     const totalLen = parts.reduce((n, p) => n + p.byteLength, 0);
     const body = new Uint8Array(totalLen);
     let off = 0;
-    for (const p of parts) {
-      body.set(p, off);
-      off += p.byteLength;
+    for (const part of parts) {
+      body.set(part, off);
+      off += part.byteLength;
     }
 
     const res = await fetch("https://www.googleapis.com/upload/youtube/v3/videos?part=snippet,status&uploadType=multipart", {
@@ -119,6 +95,7 @@ export const uploadToYouTube = createServerFn({ method: "POST" })
         "Content-Type": `multipart/related; boundary=${boundary}`,
       },
       body,
+      signal: AbortSignal.timeout(120_000),
     });
 
     if (!res.ok) {
@@ -131,8 +108,9 @@ export const uploadToYouTube = createServerFn({ method: "POST" })
         error_message: errText.slice(0, 500),
         title: data.title,
         description: data.description,
+        simulated: false,
       });
-      throw new Error(`YouTube upload failed: ${errText.slice(0, 200)}`);
+      throw new Error(`YouTube upload failed: ${errText.slice(0, 220)}`);
     }
 
     const uploaded = (await res.json()) as { id: string };
