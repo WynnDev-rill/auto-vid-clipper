@@ -2,17 +2,15 @@
   "appId": "com.wynndev.clipforge",
   "appName": "ClipForge",
   "webDir": "native-shell",
+  "android": {
+    "adjustMarginsForEdgeToEdge": "auto"
+  },
   "server": {
     "url": "https://auto-vid-clipper.vercel.app",
-    "cleartext": false
+    "cleartext": false,
+    "errorPath": "error.html"
   },
   "plugins": {
-    "SystemBars": {
-      "insetsHandling": "css",
-      "style": "DARK",
-      "hidden": false,
-      "animation": "NONE"
-    },
     "App": {
       "disableBackButtonHandler": false
     }
