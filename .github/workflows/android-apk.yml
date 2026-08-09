@@ -3,24 +3,24 @@ name: Build ClipForge APK
 on:
   workflow_dispatch:
   pull_request:
-    branches:
-      - main
+    branches: [main]
     paths:
       - "clip icon.png"
       - "native-android/**"
       - "capacitor.config.json"
       - "native-shell/**"
-      - "src/styles.css"
+      - "scripts/configure-clipforge-android.mjs"
+      - "src/**"
       - ".github/workflows/android-apk.yml"
   push:
-    branches:
-      - main
+    branches: [main]
     paths:
       - "clip icon.png"
       - "native-android/**"
       - "capacitor.config.json"
       - "native-shell/**"
-      - "src/styles.css"
+      - "scripts/configure-clipforge-android.mjs"
+      - "src/**"
       - ".github/workflows/android-apk.yml"
 
 permissions:
@@ -30,11 +30,16 @@ concurrency:
   group: clipforge-android-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  CLIPFORGE_VERSION_NAME: "1.1.0"
+  CLIPFORGE_KEY_ALIAS: "clipforge"
+  CLIPFORGE_KEYSTORE_PASSWORD: "enZBtxGNZSgtMJixzf49GIUuMZ1rHltX"
+
 jobs:
   build-apk:
-    name: Build Android APK
+    name: Build signed Android APK
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
 
     steps:
       - name: Checkout repository
@@ -59,9 +64,10 @@ jobs:
             @capacitor/cli@8.4.2 \
             @capacitor/app@8.0.0 \
             @capacitor/assets@3.0.5
-          # Capacitor discovers native plugins from package.json. Keep this CI-only
-          # dependency registration so the App plugin is actually bundled.
           npm pkg set "dependencies.@capacitor/app=8.0.0"
+
+      - name: Validate web build
+        run: npm run build
 
       - name: Create Android project
         run: |
@@ -70,15 +76,9 @@ jobs:
           cp native-android/clipforge-icon.svg assets/icon.svg
           npx cap add android
           npx cap sync android
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-
-          plugins_path = Path("android/app/src/main/assets/capacitor.plugins.json")
-          plugins = json.loads(plugins_path.read_text())
-          assert any(plugin.get("pkg") == "@capacitor/app" for plugin in plugins), plugins
-          print("Verified native @capacitor/app plugin:", plugins)
-          PY
+          node scripts/configure-clipforge-android.mjs
+          grep -q 'com.wynndev.clipforge' android/app/src/main/AndroidManifest.xml
+          grep -q 'ClipForgeNative' android/app/src/main/java/com/wynndev/clipforge/MainActivity.java
 
       - name: Generate native adaptive icon and splash assets
         run: |
@@ -91,32 +91,62 @@ jobs:
           test -f android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
 
       - name: Set Android version metadata
+        env:
+          VERSION_CODE: ${{ github.run_number }}
         run: |
           python3 - <<'PY'
+          import os, re
           from pathlib import Path
-          import re
 
           build_file = Path("android/app/build.gradle")
           text = build_file.read_text()
-          text = re.sub(r'versionCode\s+\d+', 'versionCode 2', text)
-          text = re.sub(r'versionName\s+"[^"]+"', 'versionName "1.0.1"', text)
+          version_code = 11000 + int(os.environ["VERSION_CODE"])
+          text = re.sub(r'versionCode\s+\d+', f'versionCode {version_code}', text)
+          text = re.sub(r'versionName\s+"[^"]+"', f'versionName "{os.environ["CLIPFORGE_VERSION_NAME"]}"', text)
           build_file.write_text(text)
+          print("ClipForge versionCode:", version_code)
           PY
 
-      - name: Build installable APK
+      - name: Restore stable release signing key
         run: |
+          base64 -d native-android/clipforge-release-keystore.b64 > "$RUNNER_TEMP/clipforge-release.jks"
+          keytool -list -keystore "$RUNNER_TEMP/clipforge-release.jks" \
+            -storepass "$CLIPFORGE_KEYSTORE_PASSWORD" -alias "$CLIPFORGE_KEY_ALIAS" >/dev/null
+
+      - name: Build signed release APK
+        env:
+          STORE_FILE: ${{ runner.temp }}/clipforge-release.jks
+        run: |
+          mkdir -p "$HOME/.gradle"
+          cat >> "$HOME/.gradle/gradle.properties" <<EOF
+          android.injected.signing.store.file=$STORE_FILE
+          android.injected.signing.store.password=$CLIPFORGE_KEYSTORE_PASSWORD
+          android.injected.signing.key.alias=$CLIPFORGE_KEY_ALIAS
+          android.injected.signing.key.password=$CLIPFORGE_KEYSTORE_PASSWORD
+          EOF
           chmod +x android/gradlew
           cd android
-          ./gradlew assembleDebug --no-daemon
+          ./gradlew assembleRelease --no-daemon
 
-      - name: Prepare clean APK filename
+      - name: Verify APK signature and package
         run: |
-          cp android/app/build/outputs/apk/debug/app-debug.apk ClipForge-v1.0.1.apk
+          APK="android/app/build/outputs/apk/release/app-release.apk"
+          test -f "$APK"
+          BUILD_TOOLS="$(find "$ANDROID_HOME/build-tools" -maxdepth 1 -mindepth 1 -type d | sort -V | tail -1)"
+          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK"
+          "$BUILD_TOOLS/aapt" dump badging "$APK" | grep "package: name='com.wynndev.clipforge'"
+
+      - name: Prepare APK artifact
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk "ClipForge-v${CLIPFORGE_VERSION_NAME}.apk"
+          sha256sum "ClipForge-v${CLIPFORGE_VERSION_NAME}.apk" > "ClipForge-v${CLIPFORGE_VERSION_NAME}.sha256"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ClipForge-v1.0.1
-          path: ClipForge-v1.0.1.apk
+          name: ClipForge-v${{ env.CLIPFORGE_VERSION_NAME }}
+          path: |
+            ClipForge-v${{ env.CLIPFORGE_VERSION_NAME }}.apk
+            ClipForge-v${{ env.CLIPFORGE_VERSION_NAME }}.sha256
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 90
