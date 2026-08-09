@@ -1,14 +1,24 @@
 import { createFileRoute, useNavigate, useSearch } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { z } from "zod";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
-import { Mail, Lock, Loader2 } from "lucide-react";
+import { Mail, Lock, Loader2, Smartphone } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { Logo } from "@/components/logo";
 
+declare global {
+  interface Window {
+    ClipForgeNative?: { openExternal: (url: string) => void };
+  }
+}
+
 const searchSchema = z.object({
   redirect: z.string().optional(),
+  native: z.string().optional(),
+  code: z.string().optional(),
+  error: z.string().optional(),
+  error_description: z.string().optional(),
 });
 
 export const Route = createFileRoute("/auth")({
@@ -22,37 +32,98 @@ export const Route = createFileRoute("/auth")({
   component: AuthPage,
 });
 
+function safeRedirect(value?: string) {
+  return value?.startsWith("/") && !value.startsWith("//") ? value : "/dashboard";
+}
+
 function AuthPage() {
   const navigate = useNavigate();
-  const { redirect } = useSearch({ from: "/auth" });
+  const search = useSearch({ from: "/auth" });
   const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [checked, setChecked] = useState(false);
+  const [nativeReturning, setNativeReturning] = useState(false);
+  const destination = safeRedirect(search.redirect);
+  const isNativeShell = useMemo(
+    () => typeof navigator !== "undefined" && /(?:^|\s)ClipForge\//.test(navigator.userAgent),
+    [],
+  );
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      if (data.session) navigate({ to: redirect ?? "/dashboard", replace: true });
+    let cancelled = false;
+    let timer: number | undefined;
+
+    async function finishCallback() {
+      if (search.error) {
+        setChecked(true);
+        toast.error(search.error_description ?? search.error);
+        return;
+      }
+
+      // The external browser must not exchange a native PKCE code. The verifier
+      // lives inside the APK WebView. Return the code to the app after a short,
+      // deliberate delay so Android has time to foreground the existing task.
+      if (search.native === "1" && search.code) {
+        setChecked(true);
+        setNativeReturning(true);
+        const deepLink =
+          `com.wynndev.clipforge://auth/callback?code=${encodeURIComponent(search.code)}` +
+          `&redirect=${encodeURIComponent(destination)}`;
+        timer = window.setTimeout(() => window.location.assign(deepLink), 1400);
+        return;
+      }
+
+      if (search.code) {
+        setLoading(true);
+        const { error } = await supabase.auth.exchangeCodeForSession(search.code);
+        if (cancelled) return;
+        if (error) {
+          toast.error(error.message);
+          setLoading(false);
+          setChecked(true);
+          return;
+        }
+        window.setTimeout(() => navigate({ to: destination, replace: true }), 250);
+        return;
+      }
+
+      const { data } = await supabase.auth.getSession();
+      if (cancelled) return;
+      if (data.session) navigate({ to: destination, replace: true });
       else setChecked(true);
-    });
-  }, [navigate, redirect]);
+    }
+
+    void finishCallback();
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [destination, navigate, search.code, search.error, search.error_description, search.native]);
 
   async function handleGoogle() {
     setLoading(true);
     try {
       const callback = new URL("/auth", window.location.origin);
-      if (redirect) callback.searchParams.set("redirect", redirect);
+      callback.searchParams.set("redirect", destination);
+      if (isNativeShell) callback.searchParams.set("native", "1");
 
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: "google",
         options: {
           redirectTo: callback.toString(),
+          skipBrowserRedirect: isNativeShell,
         },
       });
-
       if (error) throw error;
       if (!data.url) throw new Error("Google sign-in URL was not returned.");
+
+      if (isNativeShell && window.ClipForgeNative?.openExternal) {
+        window.ClipForgeNative.openExternal(data.url);
+        setLoading(false);
+        return;
+      }
 
       window.location.assign(data.url);
     } catch (err) {
@@ -67,8 +138,7 @@ function AuthPage() {
     try {
       if (mode === "signup") {
         const callback = new URL("/auth", window.location.origin);
-        if (redirect) callback.searchParams.set("redirect", redirect);
-
+        callback.searchParams.set("redirect", destination);
         const { error } = await supabase.auth.signUp({
           email,
           password,
@@ -80,7 +150,7 @@ function AuthPage() {
       } else {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
-        navigate({ to: redirect ?? "/dashboard", replace: true });
+        navigate({ to: destination, replace: true });
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Something went wrong");
@@ -91,6 +161,32 @@ function AuthPage() {
 
   if (!checked) return null;
 
+  if (nativeReturning) {
+    const deepLink =
+      `com.wynndev.clipforge://auth/callback?code=${encodeURIComponent(search.code ?? "")}` +
+      `&redirect=${encodeURIComponent(destination)}`;
+    return (
+      <div className="flex min-h-screen items-center justify-center px-5 py-10">
+        <div className="card-elevated w-full max-w-sm p-7 text-center">
+          <div className="mx-auto grid size-14 place-items-center rounded-2xl bg-gradient-brand shadow-glow">
+            <Smartphone size={24} />
+          </div>
+          <h1 className="mt-5 text-xl font-semibold">Login berhasil</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Mengembalikanmu ke ClipForge…
+          </p>
+          <Loader2 className="mx-auto mt-5 animate-spin text-brand-purple" />
+          <a
+            href={deepLink}
+            className="mt-6 inline-flex rounded-2xl border border-border px-4 py-2.5 text-sm font-medium"
+          >
+            Kembali ke ClipForge
+          </a>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex min-h-screen items-center justify-center px-4 py-10">
       <motion.div
@@ -99,9 +195,7 @@ function AuthPage() {
         transition={{ duration: 0.4 }}
         className="card-elevated w-full max-w-sm p-6"
       >
-        <div className="flex justify-center">
-          <Logo />
-        </div>
+        <div className="flex justify-center"><Logo /></div>
         <h1 className="mt-6 text-center font-display text-2xl font-semibold">
           {mode === "signin" ? "Welcome back" : "Create your account"}
         </h1>
@@ -114,7 +208,7 @@ function AuthPage() {
           disabled={loading}
           className="mt-6 flex w-full items-center justify-center gap-3 rounded-2xl border border-border bg-card px-4 py-3 text-sm font-medium transition-colors hover:bg-secondary disabled:opacity-60"
         >
-          <GoogleIcon />
+          {loading ? <Loader2 size={16} className="animate-spin" /> : <GoogleIcon />}
           Continue with Google
         </button>
 
@@ -125,41 +219,19 @@ function AuthPage() {
         <form onSubmit={handleEmail} className="space-y-3">
           <label className="flex items-center gap-2 rounded-2xl border border-input bg-input/30 px-3 py-2.5 focus-within:border-primary">
             <Mail size={16} className="text-muted-foreground" />
-            <input
-              type="email"
-              required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@example.com"
-              className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-            />
+            <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground" />
           </label>
           <label className="flex items-center gap-2 rounded-2xl border border-input bg-input/30 px-3 py-2.5 focus-within:border-primary">
             <Lock size={16} className="text-muted-foreground" />
-            <input
-              type="password"
-              required
-              minLength={6}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••"
-              className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-            />
+            <input type="password" required minLength={6} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground" />
           </label>
-          <button
-            type="submit"
-            disabled={loading}
-            className="flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-brand px-4 py-3 text-sm font-semibold text-primary-foreground shadow-glow disabled:opacity-60"
-          >
+          <button type="submit" disabled={loading} className="flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-brand px-4 py-3 text-sm font-semibold text-primary-foreground shadow-glow disabled:opacity-60">
             {loading ? <Loader2 size={16} className="animate-spin" /> : null}
             {mode === "signin" ? "Sign in" : "Create account"}
           </button>
         </form>
 
-        <button
-          onClick={() => setMode(mode === "signin" ? "signup" : "signin")}
-          className="mt-5 w-full text-center text-xs text-muted-foreground hover:text-foreground"
-        >
+        <button onClick={() => setMode(mode === "signin" ? "signup" : "signin")} className="mt-5 w-full text-center text-xs text-muted-foreground hover:text-foreground">
           {mode === "signin" ? "Need an account? Sign up" : "Already have an account? Sign in"}
         </button>
       </motion.div>

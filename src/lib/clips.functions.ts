@@ -6,7 +6,7 @@ export const listClips = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }) => {
     const { data, error } = await context.supabase
-      .from("clips")
+      .from("clipforge_clips")
       .select("*")
       .order("created_at", { ascending: false })
       .limit(100);
@@ -19,7 +19,7 @@ export const getClip = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => z.object({ clipId: z.string().uuid() }).parse(d))
   .handler(async ({ data, context }) => {
     const { data: clip, error } = await context.supabase
-      .from("clips")
+      .from("clipforge_clips")
       .select("*")
       .eq("id", data.clipId)
       .maybeSingle();
@@ -29,18 +29,16 @@ export const getClip = createServerFn({ method: "POST" })
 
 const UpdateSchema = z.object({
   clipId: z.string().uuid(),
-  patch: z
-    .object({
-      title: z.string().max(200).optional(),
-      description: z.string().max(5000).optional(),
-      hashtags: z.array(z.string().max(60)).max(30).optional(),
-      tags: z.array(z.string().max(60)).max(30).optional(),
-      subtitle_template: z.string().max(50).optional(),
-      subtitle_style: z.record(z.string(), z.unknown()).optional(),
-      thumbnail_text: z.string().max(80).optional(),
-      thumbnail_url: z.string().url().max(2048).optional(),
-    })
-    .strict(),
+  patch: z.object({
+    title: z.string().max(200).optional(),
+    description: z.string().max(5000).optional(),
+    hashtags: z.array(z.string().max(60)).max(30).optional(),
+    tags: z.array(z.string().max(60)).max(30).optional(),
+    subtitle_template: z.string().max(50).optional(),
+    subtitle_style: z.record(z.string(), z.unknown()).optional(),
+    thumbnail_text: z.string().max(80).optional(),
+    thumbnail_url: z.string().url().max(2048).optional(),
+  }).strict(),
 });
 
 export const updateClip = createServerFn({ method: "POST" })
@@ -48,7 +46,7 @@ export const updateClip = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => UpdateSchema.parse(d))
   .handler(async ({ data, context }) => {
     const { error } = await context.supabase
-      .from("clips")
+      .from("clipforge_clips")
       .update(data.patch as never)
       .eq("id", data.clipId);
     if (error) throw new Error(error.message);
@@ -59,7 +57,7 @@ export const deleteClip = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: unknown) => z.object({ clipId: z.string().uuid() }).parse(d))
   .handler(async ({ data, context }) => {
-    const { error } = await context.supabase.from("clips").delete().eq("id", data.clipId);
+    const { error } = await context.supabase.from("clipforge_clips").delete().eq("id", data.clipId);
     if (error) throw new Error(error.message);
     return { ok: true };
   });
@@ -69,14 +67,14 @@ export const generateMetadata = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => z.object({ clipId: z.string().uuid() }).parse(d))
   .handler(async ({ data, context }) => {
     const { data: clip } = await context.supabase
-      .from("clips")
+      .from("clipforge_clips")
       .select("*")
       .eq("id", data.clipId)
       .maybeSingle();
     if (!clip) throw new Error("Clip not found");
 
     const { data: job } = await context.supabase
-      .from("jobs")
+      .from("clipforge_jobs")
       .select("source_title, source_url")
       .eq("id", clip.job_id)
       .maybeSingle();
@@ -107,7 +105,7 @@ export const generateMetadata = createServerFn({ method: "POST" })
       hashtags: (out.hashtags ?? []).slice(0, 15).map((h) => (h.startsWith("#") ? h : `#${h}`)),
       tags: (out.tags ?? []).slice(0, 15),
     };
-    await context.supabase.from("clips").update(patch).eq("id", clip.id);
+    await context.supabase.from("clipforge_clips").update(patch).eq("id", clip.id);
     return { ok: true as const, patch };
   });
 
@@ -116,7 +114,7 @@ export const generateThumbnailIdeas = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => z.object({ clipId: z.string().uuid() }).parse(d))
   .handler(async ({ data, context }) => {
     const { data: clip } = await context.supabase
-      .from("clips")
+      .from("clipforge_clips")
       .select("*")
       .eq("id", data.clipId)
       .maybeSingle();

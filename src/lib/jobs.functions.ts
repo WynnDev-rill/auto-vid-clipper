@@ -5,7 +5,8 @@ import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import type { Database } from "@/integrations/supabase/types";
 import type { BackendJob } from "./backend.server";
 
-type JobRow = Database["public"]["Tables"]["jobs"]["Row"];
+const SOURCE_VIDEOS_BUCKET = "clipforge-source-videos";
+type JobRow = Database["public"]["Tables"]["clipforge_jobs"]["Row"];
 
 async function syncBackendJob(
   supabase: SupabaseClient<Database>,
@@ -13,11 +14,9 @@ async function syncBackendJob(
   job: JobRow,
   remote: BackendJob,
 ) {
-  // Store terminal artifacts before marking the job done. A failed insert must
-  // leave the job active so a later poll/list request can retry synchronization.
   if (remote.status === "done" && remote.clips?.length) {
     const { count, error: countError } = await supabase
-      .from("clips")
+      .from("clipforge_clips")
       .select("id", { count: "exact", head: true })
       .eq("job_id", job.id);
     if (countError) throw new Error(countError.message);
@@ -37,13 +36,13 @@ async function syncBackendJob(
         hashtags: ["#shorts", "#viral", "#clipforge"],
         tags: ["shorts", "clips"],
       }));
-      const { error } = await supabase.from("clips").insert(rows);
+      const { error } = await supabase.from("clipforge_clips").insert(rows);
       if (error) throw new Error(error.message);
     }
   }
 
   const { error } = await supabase
-    .from("jobs")
+    .from("clipforge_jobs")
     .update({
       status: remote.status,
       stage: remote.status,
@@ -86,21 +85,13 @@ const StartJobSchema = z
           url.hostname !== "youtube.com" &&
           !url.hostname.endsWith(".youtube.com")
         ) {
-          ctx.addIssue({
-            code: "custom",
-            path: ["sourceUrl"],
-            message: "Enter a valid YouTube URL",
-          });
+          ctx.addIssue({ code: "custom", path: ["sourceUrl"], message: "Enter a valid YouTube URL" });
         }
       } catch {
         ctx.addIssue({ code: "custom", path: ["sourceUrl"], message: "Enter a valid YouTube URL" });
       }
     } else if (!value.sourceUploadPath) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["sourceUploadPath"],
-        message: "Upload a video first",
-      });
+      ctx.addIssue({ code: "custom", path: ["sourceUploadPath"], message: "Upload a video first" });
     }
   });
 
@@ -109,8 +100,8 @@ export const startJob = createServerFn({ method: "POST" })
   .inputValidator((data: unknown) => StartJobSchema.parse(data))
   .handler(async ({ data, context }) => {
     const { supabase, userId } = context;
-
     let processingUrl = data.sourceUrl;
+
     if (data.sourceType === "upload") {
       const uploadPath = data.sourceUploadPath!;
       if (!uploadPath.startsWith(`${userId}/`) || uploadPath.includes("..")) {
@@ -119,7 +110,7 @@ export const startJob = createServerFn({ method: "POST" })
 
       const fileName = uploadPath.slice(uploadPath.lastIndexOf("/") + 1);
       const { data: files, error: listError } = await supabase.storage
-        .from("source-videos")
+        .from(SOURCE_VIDEOS_BUCKET)
         .list(userId, { search: fileName, limit: 2 });
       if (listError) throw new Error(`Could not verify uploaded video: ${listError.message}`);
       if (!files?.some((file) => file.name === fileName)) {
@@ -127,14 +118,14 @@ export const startJob = createServerFn({ method: "POST" })
       }
 
       const { data: signed, error: signError } = await supabase.storage
-        .from("source-videos")
+        .from(SOURCE_VIDEOS_BUCKET)
         .createSignedUrl(uploadPath, 24 * 60 * 60);
       if (signError) throw new Error(`Could not read uploaded video: ${signError.message}`);
       processingUrl = signed.signedUrl;
     }
 
     const { data: job, error } = await supabase
-      .from("jobs")
+      .from("clipforge_jobs")
       .insert({
         user_id: userId,
         source_type: data.sourceType,
@@ -149,14 +140,11 @@ export const startJob = createServerFn({ method: "POST" })
       })
       .select()
       .single();
-
     if (error) throw new Error(error.message);
 
-    // Delegate to backend if configured; otherwise mock progression on poll.
     try {
       const { createBackendJob, getBackendConfig } = await import("./backend.server");
-      const cfg = getBackendConfig();
-      if (cfg.configured) {
+      if (getBackendConfig().configured) {
         const backend = await createBackendJob({
           sourceUrl: processingUrl,
           clipDuration: data.clipDuration,
@@ -166,7 +154,7 @@ export const startJob = createServerFn({ method: "POST" })
         });
         if (backend?.backendJobId) {
           await supabase
-            .from("jobs")
+            .from("clipforge_jobs")
             .update({ backend_job_id: backend.backendJobId })
             .eq("id", job.id);
         }
@@ -174,7 +162,7 @@ export const startJob = createServerFn({ method: "POST" })
     } catch (err) {
       console.error("[startJob] backend dispatch failed:", err);
       await supabase
-        .from("jobs")
+        .from("clipforge_jobs")
         .update({
           status: "failed",
           stage: "failed",
@@ -190,11 +178,12 @@ export const listJobs = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }) => {
     let { data, error } = await context.supabase
-      .from("jobs")
+      .from("clipforge_jobs")
       .select("*")
       .order("created_at", { ascending: false })
       .limit(50);
     if (error) throw new Error(error.message);
+
     const active = (data ?? []).filter(
       (job) => job.backend_job_id && !["done", "failed", "cancelled"].includes(job.status),
     );
@@ -205,15 +194,14 @@ export const listJobs = createServerFn({ method: "GET" })
           active.map(async (job) => {
             try {
               const remote = await fetchBackendJob(job.backend_job_id!);
-              if (!remote) return;
-              await syncBackendJob(context.supabase, context.userId, job, remote);
+              if (remote) await syncBackendJob(context.supabase, context.userId, job, remote);
             } catch (err) {
               console.error("[listJobs] sync failed:", err);
             }
           }),
         );
         const refreshed = await context.supabase
-          .from("jobs")
+          .from("clipforge_jobs")
           .select("*")
           .order("created_at", { ascending: false })
           .limit(50);
@@ -230,7 +218,7 @@ export const getJob = createServerFn({ method: "POST" })
   .inputValidator((data: unknown) => z.object({ jobId: z.string().uuid() }).parse(data))
   .handler(async ({ data, context }) => {
     const { data: job, error } = await context.supabase
-      .from("jobs")
+      .from("clipforge_jobs")
       .select("*")
       .eq("id", data.jobId)
       .maybeSingle();
@@ -238,11 +226,10 @@ export const getJob = createServerFn({ method: "POST" })
     if (!job) return { job: null, clips: [] };
 
     const { data: clips } = await context.supabase
-      .from("clips")
+      .from("clipforge_clips")
       .select("*")
       .eq("job_id", data.jobId)
       .order("order_index", { ascending: true });
-
     return { job, clips: clips ?? [] };
   });
 
@@ -251,15 +238,17 @@ export const cancelJob = createServerFn({ method: "POST" })
   .inputValidator((data: unknown) => z.object({ jobId: z.string().uuid() }).parse(data))
   .handler(async ({ data, context }) => {
     const { data: job } = await context.supabase
-      .from("jobs")
+      .from("clipforge_jobs")
       .select("*")
       .eq("id", data.jobId)
       .maybeSingle();
     if (!job) throw new Error("Job not found");
-    if (["done", "failed", "cancelled"].includes(job.status))
+    if (["done", "failed", "cancelled"].includes(job.status)) {
       throw new Error("This job can no longer be cancelled");
+    }
+
     await context.supabase
-      .from("jobs")
+      .from("clipforge_jobs")
       .update({ status: "cancel_requested", stage: "cancel_requested" })
       .eq("id", job.id);
     if (job.backend_job_id) {
@@ -267,7 +256,7 @@ export const cancelJob = createServerFn({ method: "POST" })
       await cancelBackendJob(job.backend_job_id);
     } else {
       await context.supabase
-        .from("jobs")
+        .from("clipforge_jobs")
         .update({ status: "cancelled", stage: "cancelled" })
         .eq("id", job.id);
     }
@@ -279,17 +268,19 @@ export const duplicateJob = createServerFn({ method: "POST" })
   .inputValidator((data: unknown) => z.object({ jobId: z.string().uuid() }).parse(data))
   .handler(async ({ data, context }) => {
     const { data: source } = await context.supabase
-      .from("jobs")
+      .from("clipforge_jobs")
       .select("*")
       .eq("id", data.jobId)
       .maybeSingle();
     if (!source) throw new Error("Job not found");
+
     const { data: copy, error } = await context.supabase
-      .from("jobs")
+      .from("clipforge_jobs")
       .insert({
         user_id: context.userId,
         source_type: source.source_type,
         source_url: source.source_url,
+        source_upload_path: source.source_upload_path,
         source_title: source.source_title,
         clip_duration: source.clip_duration,
         clip_count: source.clip_count,
@@ -300,13 +291,14 @@ export const duplicateJob = createServerFn({ method: "POST" })
       .select()
       .single();
     if (error) throw new Error(error.message);
+
     try {
       const { createBackendJob, getBackendConfig } = await import("./backend.server");
       if (getBackendConfig().configured) {
         let processingUrl = source.source_url ?? undefined;
         if (source.source_type === "upload" && source.source_upload_path) {
           const { data: signed, error: signError } = await context.supabase.storage
-            .from("source-videos")
+            .from(SOURCE_VIDEOS_BUCKET)
             .createSignedUrl(source.source_upload_path, 24 * 60 * 60);
           if (signError) throw new Error(`Could not read uploaded video: ${signError.message}`);
           processingUrl = signed.signedUrl;
@@ -318,15 +310,16 @@ export const duplicateJob = createServerFn({ method: "POST" })
           userId: context.userId,
           jobId: copy.id,
         });
-        if (backend)
+        if (backend) {
           await context.supabase
-            .from("jobs")
+            .from("clipforge_jobs")
             .update({ backend_job_id: backend.backendJobId })
             .eq("id", copy.id);
+        }
       }
     } catch (err) {
       await context.supabase
-        .from("jobs")
+        .from("clipforge_jobs")
         .update({
           status: "failed",
           stage: "failed",
@@ -337,7 +330,6 @@ export const duplicateJob = createServerFn({ method: "POST" })
     return { jobId: copy.id };
   });
 
-// Mock stage progression when no backend is configured.
 const STAGES = ["queued", "transcribing", "analyzing", "rendering", "done"] as const;
 
 export const pollJob = createServerFn({ method: "POST" })
@@ -346,42 +338,41 @@ export const pollJob = createServerFn({ method: "POST" })
   .handler(async ({ data, context }) => {
     const { supabase, userId } = context;
     const { data: job } = await supabase
-      .from("jobs")
+      .from("clipforge_jobs")
       .select("*")
       .eq("id", data.jobId)
       .maybeSingle();
-    if (!job || ["done", "failed", "cancelled"].includes(job.status)) {
-      return { job };
-    }
+    if (!job || ["done", "failed", "cancelled"].includes(job.status)) return { job };
 
     const { getBackendConfig, fetchBackendJob } = await import("./backend.server");
     const cfg = getBackendConfig();
-
     if (cfg.configured) {
       if (!job.backend_job_id) {
         await supabase
-          .from("jobs")
+          .from("clipforge_jobs")
           .update({ status: "failed", stage: "failed", error_message: "Backend dispatch failed" })
           .eq("id", job.id);
         const { data: updated } = await supabase
-          .from("jobs")
+          .from("clipforge_jobs")
           .select("*")
           .eq("id", job.id)
           .maybeSingle();
         return { job: updated };
       }
+
       const remote = await fetchBackendJob(job.backend_job_id);
       if (remote) {
         await syncBackendJob(supabase, userId, job, remote);
         const { data: updated } = await supabase
-          .from("jobs")
+          .from("clipforge_jobs")
           .select("*")
           .eq("id", job.id)
           .maybeSingle();
         return { job: updated };
       }
+
       await supabase
-        .from("jobs")
+        .from("clipforge_jobs")
         .update({
           status: "failed",
           stage: "failed",
@@ -389,14 +380,13 @@ export const pollJob = createServerFn({ method: "POST" })
         })
         .eq("id", job.id);
       const { data: missing } = await supabase
-        .from("jobs")
+        .from("clipforge_jobs")
         .select("*")
         .eq("id", job.id)
         .maybeSingle();
       return { job: missing };
     }
 
-    // Mock progression: advance stage every poll
     const elapsedMs = Date.now() - new Date(job.created_at).getTime();
     const stepMs = 2500;
     const stepIndex = Math.min(STAGES.length - 1, Math.floor(elapsedMs / stepMs));
@@ -404,14 +394,13 @@ export const pollJob = createServerFn({ method: "POST" })
     const nextProgress = Math.min(100, Math.floor((stepIndex / (STAGES.length - 1)) * 100));
 
     await supabase
-      .from("jobs")
+      .from("clipforge_jobs")
       .update({ status: nextStage, stage: nextStage, progress: nextProgress })
       .eq("id", job.id);
 
-    // On done, create mock clips
     if (nextStage === "done") {
       const { count } = await supabase
-        .from("clips")
+        .from("clipforge_clips")
         .select("id", { count: "exact", head: true })
         .eq("job_id", job.id);
       if (!count) {
@@ -432,12 +421,12 @@ export const pollJob = createServerFn({ method: "POST" })
           description: "Auto-generated highlight (simulated).",
           created_at: new Date(now + i).toISOString(),
         }));
-        await supabase.from("clips").insert(rows);
+        await supabase.from("clipforge_clips").insert(rows);
       }
     }
 
     const { data: updated } = await supabase
-      .from("jobs")
+      .from("clipforge_jobs")
       .select("*")
       .eq("id", job.id)
       .maybeSingle();

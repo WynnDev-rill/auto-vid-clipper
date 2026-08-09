@@ -1,6 +1,3 @@
-// OAuth callback for YouTube connection. This is a public route by URL prefix
-// but it verifies the state, exchanges the code, and stores the encrypted
-// refresh token using the service-role client.
 import { createFileRoute } from "@tanstack/react-router";
 
 export const Route = createFileRoute("/api/public/youtube/callback")({
@@ -25,13 +22,11 @@ export const Route = createFileRoute("/api/public/youtube/callback")({
 
           const redirectUri = `${url.origin}/api/public/youtube/callback`;
           const tokens = await exchangeCodeForTokens(code, redirectUri);
-          if (!tokens.refresh_token) {
-            return redirectHtml(`/settings?yt_error=no_refresh_token`);
-          }
+          if (!tokens.refresh_token) return redirectHtml(`/settings?yt_error=no_refresh_token`);
           const channel = await getMyChannel(tokens.access_token);
-
           const expiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString();
-          const { error: upErr } = await supabaseAdmin.from("youtube_connections").upsert({
+
+          const { error: upErr } = await supabaseAdmin.from("clipforge_youtube_connections").upsert({
             user_id: userId,
             channel_id: channel.id,
             channel_title: channel.title,
