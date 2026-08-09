@@ -1,28 +1,23 @@
 import { createServerFn } from "@tanstack/react-start";
-import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 
 export const getYouTubeConnection = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }) => {
-    const { data } = await context.supabase
+    const { data, error } = await context.supabase
       .from("clipforge_youtube_connections")
-      .select("channel_id, channel_title, channel_thumbnail, scopes, created_at")
+      .select("channel_id, channel_title, channel_thumbnail, scopes, access_token_expires_at, created_at, updated_at")
       .eq("user_id", context.userId)
       .maybeSingle();
-    const { getYouTubeClientConfig } = await import("./youtube.server");
-    return { connection: data, oauthConfigured: getYouTubeClientConfig().configured };
-  });
+    if (error) throw new Error(error.message);
 
-export const startYouTubeConnect = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
-  .inputValidator((d: unknown) => z.object({ origin: z.string().url() }).parse(d))
-  .handler(async ({ data, context }) => {
-    const { buildYouTubeAuthUrl, getYouTubeClientConfig } = await import("./youtube.server");
-    if (!getYouTubeClientConfig().configured) return { url: null, configured: false as const };
-    const redirectUri = `${data.origin.replace(/\/$/, "")}/api/public/youtube/callback`;
-    const state = `${context.userId}.${crypto.randomUUID()}`;
-    return { url: buildYouTubeAuthUrl(redirectUri, state), configured: true as const };
+    const expiresAt = data?.access_token_expires_at ? Date.parse(data.access_token_expires_at) : 0;
+    const ready = Boolean(data && expiresAt - Date.now() > 120_000);
+    return {
+      connection: data,
+      ready,
+      needsReconnect: Boolean(data && !ready),
+    };
   });
 
 export const disconnectYouTube = createServerFn({ method: "POST" })
