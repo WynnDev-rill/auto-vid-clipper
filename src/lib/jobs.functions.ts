@@ -8,6 +8,21 @@ import type { BackendJob } from "./backend.server";
 const SOURCE_VIDEOS_BUCKET = "clipforge-source-videos";
 type JobRow = Database["public"]["Tables"]["clipforge_jobs"]["Row"];
 
+async function getAutoUploadAccessToken(
+  supabase: SupabaseClient<Database>,
+  userId: string,
+): Promise<string | undefined> {
+  const { data, error } = await supabase
+    .from("clipforge_youtube_connections")
+    .select("access_token, access_token_expires_at")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!data?.access_token || !data.access_token_expires_at) return undefined;
+  if (Date.parse(data.access_token_expires_at) - Date.now() <= 120_000) return undefined;
+  return data.access_token;
+}
+
 async function syncBackendJob(
   supabase: SupabaseClient<Database>,
   userId: string,
@@ -15,12 +30,13 @@ async function syncBackendJob(
   remote: BackendJob,
 ) {
   if (remote.status === "done" && remote.clips?.length) {
-    const { count, error: countError } = await supabase
+    const { data: existing, error: existingError } = await supabase
       .from("clipforge_clips")
-      .select("id", { count: "exact", head: true })
+      .select("id, order_index")
       .eq("job_id", job.id);
-    if (countError) throw new Error(countError.message);
-    if (!count) {
+    if (existingError) throw new Error(existingError.message);
+
+    if (!existing?.length) {
       const rows = remote.clips.map((clip) => ({
         job_id: job.id,
         user_id: userId,
@@ -28,16 +44,40 @@ async function syncBackendJob(
         thumbnail_url: clip.thumbnail_url,
         duration_s: clip.duration_s,
         order_index: clip.order,
-        status: "draft" as const,
+        status: clip.youtube_video_id ? ("uploaded" as const) : ("draft" as const),
         title: `${job.source_title ?? "Clip"} · Highlight ${clip.order + 1}`,
         description: clip.transcript ?? "",
         subtitle_template: "modern",
         subtitle_style: {},
-        hashtags: ["#shorts", "#viral", "#clipforge"],
-        tags: ["shorts", "clips"],
+        hashtags: ["#shorts", "#clipforge"],
+        tags: ["shorts", "clips", "clipforge"],
       }));
-      const { error } = await supabase.from("clipforge_clips").insert(rows);
-      if (error) throw new Error(error.message);
+      const { data: inserted, error: insertError } = await supabase
+        .from("clipforge_clips")
+        .insert(rows)
+        .select("id, order_index, title, description");
+      if (insertError) throw new Error(insertError.message);
+
+      const uploads = (inserted ?? []).flatMap((clipRow) => {
+        const remoteClip = remote.clips?.find((item) => item.order === clipRow.order_index);
+        if (!remoteClip?.youtube_video_id && !remoteClip?.youtube_error) return [];
+        return [{
+          clip_id: clipRow.id,
+          user_id: userId,
+          youtube_video_id: remoteClip.youtube_video_id ?? null,
+          visibility: "unlisted",
+          status: remoteClip.youtube_video_id ? "uploaded" : "failed",
+          title: clipRow.title,
+          description: clipRow.description,
+          simulated: false,
+          error_message: remoteClip.youtube_error ?? null,
+          uploaded_at: remoteClip.youtube_video_id ? new Date().toISOString() : null,
+        }];
+      });
+      if (uploads.length) {
+        const { error: uploadError } = await supabase.from("clipforge_uploads").insert(uploads);
+        if (uploadError) throw new Error(uploadError.message);
+      }
     }
   }
 
@@ -80,11 +120,7 @@ const StartJobSchema = z
       }
       try {
         const url = new URL(value.sourceUrl);
-        if (
-          url.hostname !== "youtu.be" &&
-          url.hostname !== "youtube.com" &&
-          !url.hostname.endsWith(".youtube.com")
-        ) {
+        if (url.hostname !== "youtu.be" && url.hostname !== "youtube.com" && !url.hostname.endsWith(".youtube.com")) {
           ctx.addIssue({ code: "custom", path: ["sourceUrl"], message: "Enter a valid YouTube URL" });
         }
       } catch {
@@ -95,33 +131,37 @@ const StartJobSchema = z
     }
   });
 
+async function createSignedSourceUrl(
+  supabase: SupabaseClient<Database>,
+  userId: string,
+  uploadPath: string,
+) {
+  if (!uploadPath.startsWith(`${userId}/`) || uploadPath.includes("..")) {
+    throw new Error("Invalid uploaded video path");
+  }
+  const fileName = uploadPath.slice(uploadPath.lastIndexOf("/") + 1);
+  const { data: files, error: listError } = await supabase.storage
+    .from(SOURCE_VIDEOS_BUCKET)
+    .list(userId, { search: fileName, limit: 2 });
+  if (listError) throw new Error(`Could not verify uploaded video: ${listError.message}`);
+  if (!files?.some((file) => file.name === fileName)) {
+    throw new Error("The video upload did not complete. Please select the file again.");
+  }
+  const { data: signed, error: signError } = await supabase.storage
+    .from(SOURCE_VIDEOS_BUCKET)
+    .createSignedUrl(uploadPath, 24 * 60 * 60);
+  if (signError) throw new Error(`Could not read uploaded video: ${signError.message}`);
+  return signed.signedUrl;
+}
+
 export const startJob = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((data: unknown) => StartJobSchema.parse(data))
   .handler(async ({ data, context }) => {
-    const { supabase, userId } = context;
+    const { supabase, userId, accessToken } = context;
     let processingUrl = data.sourceUrl;
-
     if (data.sourceType === "upload") {
-      const uploadPath = data.sourceUploadPath!;
-      if (!uploadPath.startsWith(`${userId}/`) || uploadPath.includes("..")) {
-        throw new Error("Invalid uploaded video path");
-      }
-
-      const fileName = uploadPath.slice(uploadPath.lastIndexOf("/") + 1);
-      const { data: files, error: listError } = await supabase.storage
-        .from(SOURCE_VIDEOS_BUCKET)
-        .list(userId, { search: fileName, limit: 2 });
-      if (listError) throw new Error(`Could not verify uploaded video: ${listError.message}`);
-      if (!files?.some((file) => file.name === fileName)) {
-        throw new Error("The video upload did not complete. Please select the file again.");
-      }
-
-      const { data: signed, error: signError } = await supabase.storage
-        .from(SOURCE_VIDEOS_BUCKET)
-        .createSignedUrl(uploadPath, 24 * 60 * 60);
-      if (signError) throw new Error(`Could not read uploaded video: ${signError.message}`);
-      processingUrl = signed.signedUrl;
+      processingUrl = await createSignedSourceUrl(supabase, userId, data.sourceUploadPath!);
     }
 
     const { data: job, error } = await supabase
@@ -143,32 +183,31 @@ export const startJob = createServerFn({ method: "POST" })
     if (error) throw new Error(error.message);
 
     try {
-      const { createBackendJob, getBackendConfig } = await import("./backend.server");
-      if (getBackendConfig().configured) {
-        const backend = await createBackendJob({
-          sourceUrl: processingUrl,
-          clipDuration: data.clipDuration,
-          clipCount: data.clipCount,
-          userId,
-          jobId: job.id,
-        });
-        if (backend?.backendJobId) {
-          await supabase
-            .from("clipforge_jobs")
-            .update({ backend_job_id: backend.backendJobId })
-            .eq("id", job.id);
-        }
-      }
+      const { createBackendJob } = await import("./backend.server");
+      const youtubeAccessToken = await getAutoUploadAccessToken(supabase, userId);
+      const backend = await createBackendJob({
+        sourceUrl: processingUrl,
+        clipDuration: data.clipDuration,
+        clipCount: data.clipCount,
+        userId,
+        jobId: job.id,
+        accessToken,
+        youtubeAccessToken,
+        youtubeVisibility: "unlisted",
+      });
+      if (!backend?.backendJobId) throw new Error("Render worker did not accept the generation job");
+      const { error: updateError } = await supabase
+        .from("clipforge_jobs")
+        .update({ backend_job_id: backend.backendJobId })
+        .eq("id", job.id);
+      if (updateError) throw new Error(updateError.message);
     } catch (err) {
-      console.error("[startJob] backend dispatch failed:", err);
+      const message = err instanceof Error ? err.message : "Backend dispatch failed";
       await supabase
         .from("clipforge_jobs")
-        .update({
-          status: "failed",
-          stage: "failed",
-          error_message: err instanceof Error ? err.message : "Backend dispatch failed",
-        })
+        .update({ status: "failed", stage: "failed", error_message: message })
         .eq("id", job.id);
+      throw new Error(message);
     }
 
     return { jobId: job.id };
@@ -188,27 +227,25 @@ export const listJobs = createServerFn({ method: "GET" })
       (job) => job.backend_job_id && !["done", "failed", "cancelled"].includes(job.status),
     );
     if (active.length) {
-      const { fetchBackendJob, getBackendConfig } = await import("./backend.server");
-      if (getBackendConfig().configured) {
-        await Promise.all(
-          active.map(async (job) => {
-            try {
-              const remote = await fetchBackendJob(job.backend_job_id!);
-              if (remote) await syncBackendJob(context.supabase, context.userId, job, remote);
-            } catch (err) {
-              console.error("[listJobs] sync failed:", err);
-            }
-          }),
-        );
-        const refreshed = await context.supabase
-          .from("clipforge_jobs")
-          .select("*")
-          .order("created_at", { ascending: false })
-          .limit(50);
-        data = refreshed.data;
-        error = refreshed.error;
-        if (error) throw new Error(error.message);
-      }
+      const { fetchBackendJob } = await import("./backend.server");
+      await Promise.all(
+        active.map(async (job) => {
+          try {
+            const remote = await fetchBackendJob(job.backend_job_id!, context.accessToken);
+            if (remote) await syncBackendJob(context.supabase, context.userId, job, remote);
+          } catch (err) {
+            console.error("[listJobs] sync failed:", err);
+          }
+        }),
+      );
+      const refreshed = await context.supabase
+        .from("clipforge_jobs")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(50);
+      data = refreshed.data;
+      error = refreshed.error;
+      if (error) throw new Error(error.message);
     }
     return { jobs: data ?? [] };
   });
@@ -225,11 +262,12 @@ export const getJob = createServerFn({ method: "POST" })
     if (error) throw new Error(error.message);
     if (!job) return { job: null, clips: [] };
 
-    const { data: clips } = await context.supabase
+    const { data: clips, error: clipsError } = await context.supabase
       .from("clipforge_clips")
       .select("*")
       .eq("job_id", data.jobId)
       .order("order_index", { ascending: true });
+    if (clipsError) throw new Error(clipsError.message);
     return { job, clips: clips ?? [] };
   });
 
@@ -253,7 +291,7 @@ export const cancelJob = createServerFn({ method: "POST" })
       .eq("id", job.id);
     if (job.backend_job_id) {
       const { cancelBackendJob } = await import("./backend.server");
-      await cancelBackendJob(job.backend_job_id);
+      await cancelBackendJob(job.backend_job_id, context.accessToken);
     } else {
       await context.supabase
         .from("clipforge_jobs")
@@ -293,44 +331,37 @@ export const duplicateJob = createServerFn({ method: "POST" })
     if (error) throw new Error(error.message);
 
     try {
-      const { createBackendJob, getBackendConfig } = await import("./backend.server");
-      if (getBackendConfig().configured) {
-        let processingUrl = source.source_url ?? undefined;
-        if (source.source_type === "upload" && source.source_upload_path) {
-          const { data: signed, error: signError } = await context.supabase.storage
-            .from(SOURCE_VIDEOS_BUCKET)
-            .createSignedUrl(source.source_upload_path, 24 * 60 * 60);
-          if (signError) throw new Error(`Could not read uploaded video: ${signError.message}`);
-          processingUrl = signed.signedUrl;
-        }
-        const backend = await createBackendJob({
-          sourceUrl: processingUrl,
-          clipDuration: source.clip_duration,
-          clipCount: source.clip_count,
-          userId: context.userId,
-          jobId: copy.id,
-        });
-        if (backend) {
-          await context.supabase
-            .from("clipforge_jobs")
-            .update({ backend_job_id: backend.backendJobId })
-            .eq("id", copy.id);
-        }
+      let processingUrl = source.source_url ?? undefined;
+      if (source.source_type === "upload" && source.source_upload_path) {
+        processingUrl = await createSignedSourceUrl(context.supabase, context.userId, source.source_upload_path);
       }
-    } catch (err) {
+      const youtubeAccessToken = await getAutoUploadAccessToken(context.supabase, context.userId);
+      const { createBackendJob } = await import("./backend.server");
+      const backend = await createBackendJob({
+        sourceUrl: processingUrl,
+        clipDuration: source.clip_duration,
+        clipCount: source.clip_count,
+        userId: context.userId,
+        jobId: copy.id,
+        accessToken: context.accessToken,
+        youtubeAccessToken,
+        youtubeVisibility: "unlisted",
+      });
+      if (!backend?.backendJobId) throw new Error("Render worker did not accept the duplicated job");
       await context.supabase
         .from("clipforge_jobs")
-        .update({
-          status: "failed",
-          stage: "failed",
-          error_message: err instanceof Error ? err.message : "Backend dispatch failed",
-        })
+        .update({ backend_job_id: backend.backendJobId })
         .eq("id", copy.id);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Backend dispatch failed";
+      await context.supabase
+        .from("clipforge_jobs")
+        .update({ status: "failed", stage: "failed", error_message: message })
+        .eq("id", copy.id);
+      throw new Error(message);
     }
     return { jobId: copy.id };
   });
-
-const STAGES = ["queued", "transcribing", "analyzing", "rendering", "done"] as const;
 
 export const pollJob = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
@@ -344,84 +375,21 @@ export const pollJob = createServerFn({ method: "POST" })
       .maybeSingle();
     if (!job || ["done", "failed", "cancelled"].includes(job.status)) return { job };
 
-    const { getBackendConfig, fetchBackendJob } = await import("./backend.server");
-    const cfg = getBackendConfig();
-    if (cfg.configured) {
-      if (!job.backend_job_id) {
-        await supabase
-          .from("clipforge_jobs")
-          .update({ status: "failed", stage: "failed", error_message: "Backend dispatch failed" })
-          .eq("id", job.id);
-        const { data: updated } = await supabase
-          .from("clipforge_jobs")
-          .select("*")
-          .eq("id", job.id)
-          .maybeSingle();
-        return { job: updated };
-      }
-
-      const remote = await fetchBackendJob(job.backend_job_id);
-      if (remote) {
-        await syncBackendJob(supabase, userId, job, remote);
-        const { data: updated } = await supabase
-          .from("clipforge_jobs")
-          .select("*")
-          .eq("id", job.id)
-          .maybeSingle();
-        return { job: updated };
-      }
-
+    if (!job.backend_job_id) {
       await supabase
         .from("clipforge_jobs")
-        .update({
-          status: "failed",
-          stage: "failed",
-          error_message: "Processing worker lost this job. Please retry.",
-        })
+        .update({ status: "failed", stage: "failed", error_message: "Render worker did not receive this job" })
         .eq("id", job.id);
-      const { data: missing } = await supabase
-        .from("clipforge_jobs")
-        .select("*")
-        .eq("id", job.id)
-        .maybeSingle();
-      return { job: missing };
-    }
-
-    const elapsedMs = Date.now() - new Date(job.created_at).getTime();
-    const stepMs = 2500;
-    const stepIndex = Math.min(STAGES.length - 1, Math.floor(elapsedMs / stepMs));
-    const nextStage = STAGES[stepIndex];
-    const nextProgress = Math.min(100, Math.floor((stepIndex / (STAGES.length - 1)) * 100));
-
-    await supabase
-      .from("clipforge_jobs")
-      .update({ status: nextStage, stage: nextStage, progress: nextProgress })
-      .eq("id", job.id);
-
-    if (nextStage === "done") {
-      const { count } = await supabase
-        .from("clipforge_clips")
-        .select("id", { count: "exact", head: true })
-        .eq("job_id", job.id);
-      if (!count) {
-        const now = Date.now();
-        const rows = Array.from({ length: job.clip_count }).map((_, i) => ({
-          job_id: job.id,
-          user_id: userId,
-          duration_s: job.clip_duration,
-          order_index: i,
-          status: "draft" as const,
-          title: `${job.source_title ?? "Clip"} · Highlight ${i + 1}`,
-          thumbnail_url: `https://picsum.photos/seed/${job.id.slice(0, 6)}-${i}/720/1280`,
-          video_url: null,
-          subtitle_template: "modern",
-          subtitle_style: {},
-          hashtags: ["#shorts", "#viral", "#clipforge"],
-          tags: ["shorts", "clips"],
-          description: "Auto-generated highlight (simulated).",
-          created_at: new Date(now + i).toISOString(),
-        }));
-        await supabase.from("clipforge_clips").insert(rows);
+    } else {
+      const { fetchBackendJob } = await import("./backend.server");
+      const remote = await fetchBackendJob(job.backend_job_id, context.accessToken);
+      if (remote) {
+        await syncBackendJob(supabase, userId, job, remote);
+      } else {
+        await supabase
+          .from("clipforge_jobs")
+          .update({ status: "failed", stage: "failed", error_message: "Render worker lost this job. Please retry." })
+          .eq("id", job.id);
       }
     }
 
