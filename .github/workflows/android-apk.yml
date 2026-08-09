@@ -41,12 +41,11 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
 
-      - name: Set up Java and Gradle cache
-        uses: actions/setup-java@v4
+      - name: Set up Java
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "21"
-          cache: gradle
 
       - name: Install Capacitor build tools
         run: |
@@ -68,6 +67,16 @@ jobs:
           node scripts/configure-clipforge-android.mjs
           grep -q 'com.wynndev.clipforge' android/app/src/main/AndroidManifest.xml
           grep -q 'ClipForgeNative' android/app/src/main/java/com/wynndev/clipforge/MainActivity.java
+
+      - name: Restore Gradle caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-clipforge-gradle-${{ hashFiles('android/**/*.gradle*', 'android/**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-clipforge-gradle-
 
       - name: Generate native adaptive icon and splash assets
         run: |
