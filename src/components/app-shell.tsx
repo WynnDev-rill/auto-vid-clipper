@@ -19,9 +19,9 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-dvh bg-background">
       <header className="sticky top-0 z-40 border-b border-white/8 bg-[#071022]">
-        <div className="mx-auto flex h-[76px] max-w-6xl items-center justify-between px-5 md:px-6">
+        <div className="mx-auto flex h-[68px] max-w-6xl items-center justify-between px-4 md:h-[76px] md:px-6">
           <Link to="/dashboard" className="focus:outline-none" aria-label="ClipForge home">
-            <Logo />
+            <Logo size={20} />
           </Link>
           <nav className="hidden gap-1 md:flex">
             {NAV.map((item) => {
@@ -47,13 +47,13 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
       </header>
 
-      <main className="mx-auto max-w-6xl px-4 pb-28 pt-5 md:px-6 md:pb-10">{children}</main>
+      <main className="mx-auto max-w-6xl px-4 pb-[116px] pt-5 md:px-6 md:pb-10">{children}</main>
 
       <nav
         className="fixed inset-x-0 bottom-0 z-50 border-t border-white/10 bg-[#071022] md:hidden"
         aria-label="Main navigation"
       >
-        <div className="mx-auto flex h-[78px] max-w-xl items-stretch px-1">
+        <div className="mx-auto flex h-[88px] max-w-xl items-stretch px-1 pb-1">
           {NAV.map((item) => {
             const active = pathname.startsWith(item.to);
             const Icon = item.icon;
@@ -62,12 +62,12 @@ export function AppShell({ children }: { children: ReactNode }) {
                 key={item.to}
                 to={item.to}
                 className={cn(
-                  "relative flex min-w-0 flex-1 flex-col items-center justify-center gap-1 px-1 text-[10px] font-medium transition-colors",
+                  "relative flex min-w-0 flex-1 flex-col items-center justify-center gap-1.5 px-1 text-[10px] font-medium leading-none transition-colors",
                   active ? "text-brand-blue" : "text-muted-foreground",
                 )}
               >
-                {active ? <span className="absolute inset-x-1 top-0 mx-auto h-0.5 w-10 rounded-full bg-brand-blue" /> : null}
-                <Icon size={22} strokeWidth={active ? 2.4 : 2} />
+                {active ? <span className="absolute inset-x-1 top-0 mx-auto h-[3px] w-12 rounded-full bg-brand-blue" /> : null}
+                <Icon size={23} strokeWidth={active ? 2.5 : 2} />
                 <span className="max-w-full truncate">{item.label}</span>
               </Link>
             );

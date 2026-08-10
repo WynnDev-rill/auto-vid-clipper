@@ -43,9 +43,12 @@ import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.view.Gravity;
+import android.view.View;
+import android.view.ViewGroup;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebView;
-import android.view.Window;
+import android.widget.FrameLayout;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
@@ -56,17 +59,22 @@ import org.json.JSONObject;
 
 public class MainActivity extends BridgeActivity {
     private static final String SUPABASE_HOST = "fxebamfwewsvtscrbwxk.supabase.co";
+    private static final int STATUS_BAR_COLOR = Color.rgb(48, 48, 48);
+    private static final int NAVIGATION_BAR_COLOR = Color.rgb(229, 231, 235);
+    private View topSystemBarBackground;
+    private View bottomSystemBarBackground;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         configureSystemBars();
         WebView webView = getBridge().getWebView();
+        webView.setBackgroundColor(Color.parseColor("#071022"));
         applySystemBarInsets(webView);
         String ua = webView.getSettings().getUserAgentString();
         if (ua == null) ua = "";
         if (!ua.contains("ClipForge/")) {
-            webView.getSettings().setUserAgentString(ua + " ClipForge/1.1.2");
+            webView.getSettings().setUserAgentString(ua + " ClipForge/1.1.3");
         }
         webView.addJavascriptInterface(new ClipForgeNativeBridge(), "ClipForgeNative");
         handleAuthIntent(getIntent());
@@ -83,32 +91,67 @@ public class MainActivity extends BridgeActivity {
     public void onResume() {
         super.onResume();
         configureSystemBars();
+        ViewCompat.requestApplyInsets(findViewById(android.R.id.content));
     }
 
     private void configureSystemBars() {
-        Window window = getWindow();
-        WindowCompat.setDecorFitsSystemWindows(window, true);
-        window.setStatusBarColor(Color.parseColor("#303030"));
-        window.setNavigationBarColor(Color.parseColor("#E5E7EB"));
+        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
+        getWindow().setStatusBarColor(Color.TRANSPARENT);
+        getWindow().setNavigationBarColor(Color.TRANSPARENT);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            window.setNavigationBarDividerColor(Color.parseColor("#C8CDD5"));
+            getWindow().setNavigationBarDividerColor(Color.TRANSPARENT);
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            window.setStatusBarContrastEnforced(true);
-            window.setNavigationBarContrastEnforced(true);
+            getWindow().setStatusBarContrastEnforced(false);
+            getWindow().setNavigationBarContrastEnforced(false);
         }
-        WindowInsetsControllerCompat controller = WindowCompat.getInsetsController(window, window.getDecorView());
+        WindowInsetsControllerCompat controller = WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView());
         controller.setAppearanceLightStatusBars(false);
         controller.setAppearanceLightNavigationBars(true);
     }
 
     private void applySystemBarInsets(WebView webView) {
-        ViewCompat.setOnApplyWindowInsetsListener(webView, (view, windowInsets) -> {
-            Insets bars = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars());
-            view.setPadding(bars.left, bars.top, bars.right, bars.bottom);
-            return WindowInsetsCompat.CONSUMED;
+        FrameLayout content = findViewById(android.R.id.content);
+        topSystemBarBackground = new View(this);
+        topSystemBarBackground.setBackgroundColor(STATUS_BAR_COLOR);
+        bottomSystemBarBackground = new View(this);
+        bottomSystemBarBackground.setBackgroundColor(NAVIGATION_BAR_COLOR);
+
+        content.addView(topSystemBarBackground, new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, 0, Gravity.TOP));
+        content.addView(bottomSystemBarBackground, new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, 0, Gravity.BOTTOM));
+
+        ViewCompat.setOnApplyWindowInsetsListener(content, (view, windowInsets) -> {
+            Insets status = windowInsets.getInsets(WindowInsetsCompat.Type.statusBars());
+            Insets navigation = windowInsets.getInsets(WindowInsetsCompat.Type.navigationBars());
+            Insets system = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars());
+
+            FrameLayout.LayoutParams topParams = (FrameLayout.LayoutParams) topSystemBarBackground.getLayoutParams();
+            topParams.height = status.top;
+            topParams.gravity = Gravity.TOP;
+            topSystemBarBackground.setLayoutParams(topParams);
+
+            FrameLayout.LayoutParams bottomParams = (FrameLayout.LayoutParams) bottomSystemBarBackground.getLayoutParams();
+            bottomParams.height = navigation.bottom;
+            bottomParams.gravity = Gravity.BOTTOM;
+            bottomSystemBarBackground.setLayoutParams(bottomParams);
+
+            ViewGroup.LayoutParams rawParams = webView.getLayoutParams();
+            if (rawParams instanceof ViewGroup.MarginLayoutParams) {
+                ViewGroup.MarginLayoutParams params = (ViewGroup.MarginLayoutParams) rawParams;
+                params.leftMargin = system.left;
+                params.topMargin = status.top;
+                params.rightMargin = system.right;
+                params.bottomMargin = navigation.bottom;
+                webView.setLayoutParams(params);
+            }
+
+            topSystemBarBackground.bringToFront();
+            bottomSystemBarBackground.bringToFront();
+            return windowInsets;
         });
-        ViewCompat.requestApplyInsets(webView);
+        ViewCompat.requestApplyInsets(content);
     }
 
     private boolean isValidOAuthUrl(Uri uri) {
@@ -180,7 +223,7 @@ function addItemsToStyles(stylesInput, items) {
 
 if (fs.existsSync(stylesPath)) {
   const barItems = [
-    ['android:windowBackground', '#303030'],
+    ['android:windowBackground', '#071022'],
     ['android:statusBarColor', '#303030'],
     ['android:navigationBarColor', '#E5E7EB'],
     ['android:windowLightStatusBar', 'false'],
@@ -194,4 +237,4 @@ if (fs.existsSync(stylesPath)) {
   fs.writeFileSync(stylesV35Path, v35);
 }
 
-console.log('Configured ClipForge Android: native OAuth, persistent app shell, and isolated system bars.');
+console.log('Configured ClipForge Android: OAuth deep links, true system-bar-safe viewport, and MemoCard-style system bars.');
