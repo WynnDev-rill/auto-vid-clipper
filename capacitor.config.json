@@ -6,7 +6,7 @@
     "adjustMarginsForEdgeToEdge": "force"
   },
   "server": {
-    "url": "https://clipforge-app-final.onrender.com",
+    "url": "https://auto-vid-clipper.vercel.app",
     "cleartext": false,
     "errorPath": "error.html"
   },
