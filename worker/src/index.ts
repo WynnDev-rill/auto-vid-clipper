@@ -16,7 +16,7 @@ app.use(cors({ origin: true, methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"
 function deviceId(req: express.Request) { return String(req.header("x-device-id") || req.query.deviceId || "").trim(); }
 function owns(req: express.Request, job: ReturnType<typeof getJob>) { const id = deviceId(req); return Boolean(job && id && job.deviceId === id); }
 
-app.get("/health", (_req, res) => res.json({ ok: true, version: "3.0.0", transcription: "local-whisper-transformers-js", highlightRanking: "local-multisignal", downloader: "yt-dlp", persistentState: Boolean(process.env.DATABASE_URL) }));
+app.get("/health", (_req, res) => res.json({ ok: true, version: "3.0.0", transcription: "local-whisper-cpp", highlightRanking: "local-multisignal", downloader: "yt-dlp", persistentState: Boolean(process.env.DATABASE_URL) }));
 
 app.put("/uploads/:id", async (req, res) => {
   const uploadId = String(req.params.id || ""), owner = deviceId(req);
