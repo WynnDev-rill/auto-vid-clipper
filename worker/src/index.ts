@@ -4,7 +4,7 @@ import express from "express";
 import { nanoid } from "nanoid";
 import { z } from "zod";
 import { cleanupOldMedia, initDatabase, storeMediaStream, writeMediaToResponse } from "./database.js";
-import { renderExport, runPipeline } from "./pipeline.js";
+import { exportSubtitles, renderExport, runPipeline } from "./pipeline.js";
 import { createJob, deleteJob, getJob, initStore, listJobsForDevice, listRecoverableJobs, requestCancellation, updateJob } from "./store.js";
 
 const app = express();
@@ -71,6 +71,14 @@ app.post("/jobs/:id/export", async (req, res) => {
   const parsed = ExportSchema.safeParse(req.body); if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Invalid export options" });
   try { return res.json(await renderExport({ jobId: job.id, ...parsed.data })); }
   catch (error) { console.error("[export] failed", error); return res.status(500).json({ error: error instanceof Error ? error.message : "Export failed" }); }
+});
+
+const SubtitleSchema = z.object({ clipOrder: z.number().int().min(0).max(30), trimStart: z.number().min(-5).max(5).optional(), trimEnd: z.number().min(-5).max(5).optional() });
+app.post("/jobs/:id/subtitles", async (req, res) => {
+  const job = getJob(req.params.id); if (!job) return res.status(404).json({ error: "not found" }); if (!owns(req, job)) return res.status(403).json({ error: "forbidden" }); if (job.status !== "done") return res.status(409).json({ error: "Analysis must finish first" });
+  const parsed = SubtitleSchema.safeParse(req.body); if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message || "Invalid subtitle options" });
+  try { return res.json(await exportSubtitles({ jobId: job.id, ...parsed.data })); }
+  catch (error) { console.error("[subtitles] failed", error); return res.status(500).json({ error: error instanceof Error ? error.message : "Subtitle export failed" }); }
 });
 
 app.get("/media/:id", async (req, res) => {
