@@ -47,17 +47,24 @@ export async function renderClip(opts: {
   const assPath = path.join(dir, `${path.basename(opts.outMp4, ".mp4")}.ass`);
   fs.writeFileSync(assPath, buildAss(opts.words, opts.startS, opts.endS), "utf8");
   const escapedAss = assPath.replace(/\\/g, "/").replace(/:/g, "\\:").replace(/'/g, "\\'");
-  const vf =
-    `crop='min(iw,ih*9/16)':'min(ih,iw*16/9)':(iw-min(iw\\,ih*9/16))/2:(ih-min(ih\\,iw*16/9))/2,` +
-    `scale=1080:1920:flags=lanczos,` +
-    `ass='${escapedAss}'`;
+
+  // Subject-safe vertical layout: preserve the entire source in the foreground
+  // and fill unused 9:16 space with a blurred copy. This avoids the destructive
+  // fixed center-crop that cuts off faces whenever the speaker is off-center.
+  const filter =
+    `[0:v]split=2[bgsrc][fgsrc];` +
+    `[bgsrc]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=18:8[bg];` +
+    `[fgsrc]scale=1080:1920:force_original_aspect_ratio=decrease[fg];` +
+    `[bg][fg]overlay=(W-w)/2:(H-h)/2,ass='${escapedAss}'[v]`;
 
   await runFfmpeg([
     "-y",
     "-ss", opts.startS.toFixed(3),
     "-to", opts.endS.toFixed(3),
     "-i", opts.sourceVideo,
-    "-vf", vf,
+    "-filter_complex", filter,
+    "-map", "[v]",
+    "-map", "0:a?",
     "-c:v", "libx264",
     "-preset", "veryfast",
     "-crf", "20",
@@ -67,7 +74,7 @@ export async function renderClip(opts: {
     opts.outMp4,
   ]);
 
-  const thumbAt = (opts.endS - opts.startS) * 0.15;
+  const thumbAt = Math.max(0.5, (opts.endS - opts.startS) * 0.18);
   await runFfmpeg([
     "-y",
     "-ss", thumbAt.toFixed(3),
@@ -85,7 +92,7 @@ function runFfmpeg(args: string[]): Promise<void> {
     p.stderr.on("data", (b) => { err += b.toString(); });
     p.on("close", (code) => {
       if (code === 0) resolve();
-      else reject(new Error(`ffmpeg exited ${code}: ${err.slice(-700)}`));
+      else reject(new Error(`ffmpeg exited ${code}: ${err.slice(-900)}`));
     });
     p.on("error", reject);
   });
@@ -110,7 +117,7 @@ function buildAss(words: Word[], clipStart: number, clipEnd: number): string {
     }))
     .filter((w) => w.word.length > 0 && w.end > w.start);
 
-  const groupSize = 4;
+  const groupSize = 5;
   const groups: Array<typeof inClip> = [];
   for (let i = 0; i < inClip.length; i += groupSize) groups.push(inClip.slice(i, i + groupSize));
 
@@ -122,7 +129,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Base,DejaVu Sans,72,&H00FFFFFF,&H0000FFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,5,2,2,60,60,220,1
+Style: Base,DejaVu Sans,68,&H00FFFFFF,&H0000FFFF,&H00000000,&H70000000,-1,0,0,0,100,100,0,0,1,5,2,2,64,64,250,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -130,23 +137,16 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
   const events: string[] = [];
   for (const grp of groups) {
-    if (grp.length === 0) continue;
-    const gStart = grp[0].start;
-    const gEnd = grp[grp.length - 1].end;
+    if (!grp.length) continue;
     for (let i = 0; i < grp.length; i++) {
       const active = grp[i];
       const parts = grp.map((w, j) =>
         j === i
-          ? `{\\c&H00A855F7&\\b1}${escapeAss(w.word)}{\\c&HFFFFFF&\\b0}`
+          ? `{\\c&H00D67CFF&\\b1}${escapeAss(w.word)}{\\c&HFFFFFF&\\b0}`
           : escapeAss(w.word),
       );
-      events.push(
-        `Dialogue: 0,${fmtAssTime(active.start)},${fmtAssTime(active.end)},Base,,0,0,0,,${parts.join(" ")}`,
-      );
+      events.push(`Dialogue: 0,${fmtAssTime(active.start)},${fmtAssTime(active.end)},Base,,0,0,0,,${parts.join(" ")}`);
     }
-    events.push(
-      `Dialogue: 0,${fmtAssTime(gStart)},${fmtAssTime(gEnd)},Base,,0,0,0,,${grp.map((w) => escapeAss(w.word)).join(" ")}`,
-    );
   }
   return header + events.join("\n") + "\n";
 }

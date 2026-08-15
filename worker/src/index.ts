@@ -11,7 +11,7 @@ import {
   setWhisperProvider,
   type WhisperProvider,
 } from "./settings.js";
-import { createJob, getJob, requestCancellation } from "./store.js";
+import { createJob, getJob, listRecoverableJobs, requestCancellation } from "./store.js";
 import { listProviderAvailability } from "./whisper.js";
 
 const app = express();
@@ -34,10 +34,7 @@ async function authenticate(req: express.Request): Promise<AuthResult | null> {
 
   try {
     const response = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        apikey: SUPABASE_KEY,
-      },
+      headers: { Authorization: `Bearer ${token}`, apikey: SUPABASE_KEY },
       signal: AbortSignal.timeout(10_000),
     });
     if (!response.ok) return null;
@@ -49,21 +46,22 @@ async function authenticate(req: express.Request): Promise<AuthResult | null> {
   }
 }
 
+// Keep the worker backward-compatible with projects created by older APKs.
+// The V2 Create screen itself uses the narrower 15–90s / 5–15 candidate defaults.
 const CreateJobSchema = z.object({
   sourceUrl: z.string().url().optional(),
   uploadKey: z.string().optional(),
   clipDuration: z.number().int().min(5).max(180),
   clipCount: z.number().int().min(1).max(20),
+  goal: z.string().trim().max(240).optional(),
   userId: z.string().min(1),
   jobId: z.string().min(1),
-  youtubeAccessToken: z.string().min(10).optional(),
-  youtubeVisibility: z.enum(["public", "unlisted", "private"]).optional(),
 });
 
 app.get("/health", (_req, res) => {
   res.json({
     ok: true,
-    version: "1.1.1",
+    version: "2.0.0",
     providers: listProviderAvailability(),
     publicBaseUrlConfigured: Boolean(process.env.PUBLIC_BASE_URL),
     supabaseAuthConfigured: Boolean(SUPABASE_URL && SUPABASE_KEY),
@@ -86,8 +84,7 @@ app.post("/jobs", async (req, res) => {
     sourceUrl: parsed.data.sourceUrl,
     clipDuration: parsed.data.clipDuration,
     clipCount: parsed.data.clipCount,
-    youtubeAccessToken: parsed.data.youtubeAccessToken,
-    youtubeVisibility: parsed.data.youtubeVisibility ?? "unlisted",
+    goal: parsed.data.goal,
   });
   runPipeline(job).catch((err) => console.error("[pipeline] unhandled:", err));
   return res.json({ id: job.id });
@@ -138,9 +135,7 @@ app.get("/settings/whisper-provider", async (req, res) => {
   });
 });
 
-const WhisperProviderSchema = z.object({
-  provider: z.enum(["auto", "groq", "openai", "openrouter"]),
-});
+const WhisperProviderSchema = z.object({ provider: z.enum(["auto", "groq", "openai", "openrouter"]) });
 
 app.post("/settings/whisper-provider", async (req, res) => {
   const auth = await authenticate(req);
@@ -151,8 +146,6 @@ app.post("/settings/whisper-provider", async (req, res) => {
   return res.json({ ok: true, provider: getWhisperProvider() });
 });
 
-// Rendered outputs need to be fetchable by the app and YouTube after the worker
-// finishes. Only derived clips live here, never source uploads or auth tokens.
 app.use(
   "/media",
   express.static(path.resolve(WORK_DIR), {
@@ -163,4 +156,9 @@ app.use(
 
 app.listen(PORT, () => {
   console.log(`[clipforge-worker] listening on :${PORT}`);
+  const recoverable = listRecoverableJobs();
+  if (recoverable.length) console.log(`[clipforge-worker] restarting ${recoverable.length} interrupted job(s)`);
+  for (const job of recoverable) {
+    runPipeline(job).catch((err) => console.error(`[pipeline] recovery failed for ${job.id}:`, err));
+  }
 });

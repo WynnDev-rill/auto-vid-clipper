@@ -8,19 +8,9 @@ import type { BackendJob } from "./backend.server";
 const SOURCE_VIDEOS_BUCKET = "clipforge-source-videos";
 type JobRow = Database["public"]["Tables"]["clipforge_jobs"]["Row"];
 
-async function getAutoUploadAccessToken(
-  supabase: SupabaseClient<Database>,
-  userId: string,
-): Promise<string | undefined> {
-  const { data, error } = await supabase
-    .from("clipforge_youtube_connections")
-    .select("access_token, access_token_expires_at")
-    .eq("user_id", userId)
-    .maybeSingle();
-  if (error) throw new Error(error.message);
-  if (!data?.access_token || !data.access_token_expires_at) return undefined;
-  if (Date.parse(data.access_token_expires_at) - Date.now() <= 120_000) return undefined;
-  return data.access_token;
+function scoreTag(score?: number) {
+  const normalized = Math.max(0, Math.min(100, Math.round(score ?? 0)));
+  return `moment-score:${normalized}`;
 }
 
 async function syncBackendJob(
@@ -37,47 +27,25 @@ async function syncBackendJob(
     if (existingError) throw new Error(existingError.message);
 
     if (!existing?.length) {
-      const rows = remote.clips.map((clip) => ({
+      const ranked = [...remote.clips].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+      const rows = ranked.map((clip, index) => ({
         job_id: job.id,
         user_id: userId,
         video_url: clip.video_url,
         thumbnail_url: clip.thumbnail_url,
         duration_s: clip.duration_s,
-        order_index: clip.order,
-        status: clip.youtube_video_id ? ("uploaded" as const) : ("draft" as const),
-        title: `${job.source_title ?? "Clip"} · Highlight ${clip.order + 1}`,
+        order_index: index,
+        status: "draft" as const,
+        title: `${job.source_title ?? "Clip"} · Moment ${index + 1}`,
         description: clip.transcript ?? "",
+        thumbnail_text: clip.reason ?? "Strong candidate moment",
         subtitle_template: "modern",
         subtitle_style: {},
-        hashtags: ["#shorts", "#clipforge"],
-        tags: ["shorts", "clips", "clipforge"],
+        hashtags: ["#shorts"],
+        tags: [scoreTag(clip.score), ...(clip.signals ?? []).slice(0, 5)],
       }));
-      const { data: inserted, error: insertError } = await supabase
-        .from("clipforge_clips")
-        .insert(rows)
-        .select("id, order_index, title, description");
+      const { error: insertError } = await supabase.from("clipforge_clips").insert(rows);
       if (insertError) throw new Error(insertError.message);
-
-      const uploads = (inserted ?? []).flatMap((clipRow) => {
-        const remoteClip = remote.clips?.find((item) => item.order === clipRow.order_index);
-        if (!remoteClip?.youtube_video_id && !remoteClip?.youtube_error) return [];
-        return [{
-          clip_id: clipRow.id,
-          user_id: userId,
-          youtube_video_id: remoteClip.youtube_video_id ?? null,
-          visibility: "unlisted",
-          status: remoteClip.youtube_video_id ? "uploaded" : "failed",
-          title: clipRow.title,
-          description: clipRow.description,
-          simulated: false,
-          error_message: remoteClip.youtube_error ?? null,
-          uploaded_at: remoteClip.youtube_video_id ? new Date().toISOString() : null,
-        }];
-      });
-      if (uploads.length) {
-        const { error: uploadError } = await supabase.from("clipforge_uploads").insert(uploads);
-        if (uploadError) throw new Error(uploadError.message);
-      }
     }
   }
 
@@ -109,22 +77,31 @@ const StartJobSchema = z
     sourceUrl: z.string().min(1).max(2048).optional(),
     sourceUploadPath: z.string().min(1).max(1024).optional(),
     sourceTitle: z.string().min(1).max(200).optional(),
-    clipDuration: z.number().int().min(5).max(180),
-    clipCount: z.number().int().min(1).max(20),
+    clipDuration: z.number().int().min(15).max(90),
+    clipCount: z.number().int().min(5).max(15),
+    goal: z.string().trim().max(240).optional(),
   })
   .superRefine((value, ctx) => {
     if (value.sourceType === "youtube_url") {
       if (!value.sourceUrl) {
-        ctx.addIssue({ code: "custom", path: ["sourceUrl"], message: "YouTube URL is required" });
+        ctx.addIssue({ code: "custom", path: ["sourceUrl"], message: "Video URL is required" });
         return;
       }
       try {
         const url = new URL(value.sourceUrl);
-        if (url.hostname !== "youtu.be" && url.hostname !== "youtube.com" && !url.hostname.endsWith(".youtube.com")) {
-          ctx.addIssue({ code: "custom", path: ["sourceUrl"], message: "Enter a valid YouTube URL" });
+        if (!["http:", "https:"].includes(url.protocol)) throw new Error("bad protocol");
+        const host = url.hostname.toLowerCase();
+        if (
+          host === "localhost" ||
+          host === "127.0.0.1" ||
+          host === "0.0.0.0" ||
+          host === "::1" ||
+          host.endsWith(".local")
+        ) {
+          throw new Error("local URL");
         }
       } catch {
-        ctx.addIssue({ code: "custom", path: ["sourceUrl"], message: "Enter a valid YouTube URL" });
+        ctx.addIssue({ code: "custom", path: ["sourceUrl"], message: "Enter a valid public video URL" });
       }
     } else if (!value.sourceUploadPath) {
       ctx.addIssue({ code: "custom", path: ["sourceUploadPath"], message: "Upload a video first" });
@@ -184,18 +161,16 @@ export const startJob = createServerFn({ method: "POST" })
 
     try {
       const { createBackendJob } = await import("./backend.server");
-      const youtubeAccessToken = await getAutoUploadAccessToken(supabase, userId);
       const backend = await createBackendJob({
         sourceUrl: processingUrl,
         clipDuration: data.clipDuration,
         clipCount: data.clipCount,
+        goal: data.goal,
         userId,
         jobId: job.id,
         accessToken,
-        youtubeAccessToken,
-        youtubeVisibility: "unlisted",
       });
-      if (!backend?.backendJobId) throw new Error("Render worker did not accept the generation job");
+      if (!backend?.backendJobId) throw new Error("Render worker did not accept the analysis job");
       const { error: updateError } = await supabase
         .from("clipforge_jobs")
         .update({ backend_job_id: backend.backendJobId })
@@ -335,7 +310,6 @@ export const duplicateJob = createServerFn({ method: "POST" })
       if (source.source_type === "upload" && source.source_upload_path) {
         processingUrl = await createSignedSourceUrl(context.supabase, context.userId, source.source_upload_path);
       }
-      const youtubeAccessToken = await getAutoUploadAccessToken(context.supabase, context.userId);
       const { createBackendJob } = await import("./backend.server");
       const backend = await createBackendJob({
         sourceUrl: processingUrl,
@@ -344,8 +318,6 @@ export const duplicateJob = createServerFn({ method: "POST" })
         userId: context.userId,
         jobId: copy.id,
         accessToken: context.accessToken,
-        youtubeAccessToken,
-        youtubeVisibility: "unlisted",
       });
       if (!backend?.backendJobId) throw new Error("Render worker did not accept the duplicated job");
       await context.supabase

@@ -12,14 +12,14 @@ on:
       - ".github/workflows/android-apk.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: clipforge-android-${{ github.ref }}
   cancel-in-progress: true
 
 env:
-  CLIPFORGE_VERSION_NAME: "1.1.3"
+  CLIPFORGE_VERSION_NAME: "2.0.${{ github.run_number }}"
   CLIPFORGE_KEY_ALIAS: "clipforge"
   CLIPFORGE_KEYSTORE_PASSWORD: "enZBtxGNZSgtMJixzf49GIUuMZ1rHltX"
   GRADLE_OPTS: "-Dorg.gradle.caching=true -Dorg.gradle.parallel=true"
@@ -67,8 +67,9 @@ jobs:
           node scripts/configure-clipforge-android.mjs
           grep -q 'com.wynndev.clipforge' android/app/src/main/AndroidManifest.xml
           grep -q 'ClipForgeNative' android/app/src/main/java/com/wynndev/clipforge/MainActivity.java
+          grep -q 'downloadFile' android/app/src/main/java/com/wynndev/clipforge/MainActivity.java
+          grep -q 'getAppVersion' android/app/src/main/java/com/wynndev/clipforge/MainActivity.java
           grep -q 'setDecorFitsSystemWindows(getWindow(), false)' android/app/src/main/java/com/wynndev/clipforge/MainActivity.java
-          grep -q 'topSystemBarBackground' android/app/src/main/java/com/wynndev/clipforge/MainActivity.java
 
       - name: Restore Gradle caches
         uses: actions/cache@v4
@@ -100,7 +101,7 @@ jobs:
 
           build_file = Path("android/app/build.gradle")
           text = build_file.read_text()
-          version_code = 11000 + int(os.environ["VERSION_CODE"])
+          version_code = 20000 + int(os.environ["VERSION_CODE"])
           text = re.sub(r'versionCode\s+\d+', f'versionCode {version_code}', text)
           text = re.sub(r'versionName\s+"[^"]+"', f'versionName "{os.environ["CLIPFORGE_VERSION_NAME"]}"', text)
           build_file.write_text(text)
@@ -152,3 +153,17 @@ jobs:
             ClipForge-v${{ env.CLIPFORGE_VERSION_NAME }}.sha256
           if-no-files-found: error
           retention-days: 90
+
+      - name: Publish app update release
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.CLIPFORGE_VERSION_NAME }}
+          name: ClipForge v${{ env.CLIPFORGE_VERSION_NAME }}
+          body: |
+            ClipForge Android update.
+            Install over the existing app; the package ID and signing identity are unchanged.
+          make_latest: true
+          files: |
+            ClipForge-v${{ env.CLIPFORGE_VERSION_NAME }}.apk
+            ClipForge-v${{ env.CLIPFORGE_VERSION_NAME }}.sha256
