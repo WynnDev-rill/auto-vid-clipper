@@ -1,0 +1,20 @@
+html.clipforge-native,
+html.clipforge-native body {
+  background: #071022 !important;
+}
+
+/* Android already applies system-bar insets to the WebView. */
+html.clipforge-native body {
+  padding: 0 !important;
+}
+
+html.clipforge-native header {
+  top: 0 !important;
+}
+
+html.clipforge-native input,
+html.clipforge-native textarea,
+html.clipforge-native select,
+html.clipforge-native button {
+  -webkit-tap-highlight-color: transparent;
+}
