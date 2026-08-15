@@ -7,8 +7,9 @@ export type ClipResult = {
   thumbnail_url: string;
   duration_s: number;
   transcript?: string;
-  youtube_video_id?: string;
-  youtube_error?: string;
+  score?: number;
+  reason?: string;
+  signals?: string[];
 };
 
 export type JobStatus =
@@ -28,8 +29,7 @@ export type Job = {
   sourceUrl?: string;
   clipDuration: number;
   clipCount: number;
-  youtubeAccessToken?: string;
-  youtubeVisibility?: "public" | "unlisted" | "private";
+  goal?: string;
   status: JobStatus;
   progress: number;
   clips: ClipResult[];
@@ -44,9 +44,7 @@ export type Job = {
 };
 
 const WORK_DIR = path.resolve(process.env.WORK_DIR || "./.work");
-const STORE_DIR = path.resolve(
-  process.env.STATE_DIR || path.join(path.dirname(WORK_DIR), ".clipforge-state"),
-);
+const STORE_DIR = path.resolve(process.env.STATE_DIR || path.join(path.dirname(WORK_DIR), ".clipforge-state"));
 const STORE_FILE = path.join(STORE_DIR, "jobs.json");
 fs.mkdirSync(STORE_DIR, { recursive: true });
 
@@ -62,25 +60,25 @@ function loadJobs(): Map<string, Job> {
 const jobs = loadJobs();
 
 function persist() {
-  // Google access tokens are deliberately process-memory only. Render cannot
-  // resume an in-flight FFmpeg pipeline after a restart anyway, so there is no
-  // reason to leave third-party credentials on disk.
-  const safeJobs = [...jobs.values()].map(({ youtubeAccessToken: _token, ...job }) => job);
   const tmp = `${STORE_FILE}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(safeJobs, null, 2));
+  fs.writeFileSync(tmp, JSON.stringify([...jobs.values()], null, 2));
   fs.renameSync(tmp, STORE_FILE);
 }
 
+// A Render restart cannot resume FFmpeg mid-command, but it can safely restart
+// the deterministic pipeline from the source URL. Preserve pending jobs rather
+// than silently converting every restart into a permanent user-facing failure.
 for (const job of jobs.values()) {
-  if (["queued", "transcribing", "analyzing", "rendering"].includes(job.status)) {
-    const now = Date.now();
+  if (["transcribing", "analyzing", "rendering"].includes(job.status)) {
     jobs.set(job.id, {
       ...job,
-      status: "failed",
-      error: "Worker restarted while this job was processing. Please retry.",
-      estimatedRemainingS: 0,
-      updatedAt: now,
-      stageStartedAt: now,
+      status: "queued",
+      progress: 1,
+      clips: [],
+      completedClips: 0,
+      estimatedRemainingS: undefined,
+      updatedAt: Date.now(),
+      stageStartedAt: Date.now(),
     });
   } else if (job.status === "cancel_requested") {
     jobs.set(job.id, {
@@ -95,17 +93,7 @@ for (const job of jobs.values()) {
 if (jobs.size) persist();
 
 export function createJob(
-  init: Omit<
-    Job,
-    | "status"
-    | "progress"
-    | "clips"
-    | "createdAt"
-    | "startedAt"
-    | "updatedAt"
-    | "stageStartedAt"
-    | "completedClips"
-  >,
+  init: Omit<Job, "status" | "progress" | "clips" | "createdAt" | "startedAt" | "updatedAt" | "stageStartedAt" | "completedClips">,
 ): Job {
   const now = Date.now();
   const job: Job = {
@@ -126,6 +114,10 @@ export function createJob(
 
 export function getJob(id: string) {
   return jobs.get(id);
+}
+
+export function listRecoverableJobs() {
+  return [...jobs.values()].filter((job) => job.status === "queued" && Boolean(job.sourceUrl));
 }
 
 export function updateJob(id: string, patch: Partial<Job>) {
