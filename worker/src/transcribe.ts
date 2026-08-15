@@ -4,7 +4,7 @@ import { env, pipeline } from "@huggingface/transformers";
 import { WaveFile } from "wavefile";
 import type { Segment, Transcript, Word } from "./types.js";
 
-const MODEL = process.env.CLIPFORGE_ASR_MODEL || "Xenova/whisper-tiny";
+const MODEL = process.env.CLIPFORGE_ASR_MODEL || "onnx-community/whisper-tiny_timestamped";
 env.cacheDir = path.resolve(process.env.ASR_CACHE_DIR || "./.models");
 env.allowLocalModels = true;
 env.allowRemoteModels = true;
@@ -74,9 +74,9 @@ export async function transcribe(audioPath: string): Promise<Transcript> {
     .map((chunk: any) => {
       const timestamp = Array.isArray(chunk.timestamp) ? chunk.timestamp : [0, 0];
       const start = Number(timestamp[0] ?? 0);
-      const end = Number(timestamp[1] ?? start + 0.2);
+      const endRaw = timestamp[1] == null ? start + 0.2 : Number(timestamp[1]);
       const word = String(chunk.text ?? "").trim();
-      return { word, start: Math.max(0, start), end: Math.max(start + 0.02, end) };
+      return { word, start: Math.max(0, start), end: Math.max(start + 0.02, endRaw) };
     })
     .filter((word: Word) => word.word.length > 0 && Number.isFinite(word.start) && Number.isFinite(word.end));
 
