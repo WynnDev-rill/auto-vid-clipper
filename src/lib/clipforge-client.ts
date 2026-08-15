@@ -52,6 +52,7 @@ export function retryJob(jobId: string) { return api<{ id: string }>(`/jobs/${en
 export function cancelJob(jobId: string) { return api<{ ok: true }>(`/jobs/${encodeURIComponent(jobId)}/cancel`, { method: "POST" }); }
 export function deleteJob(jobId: string) { return api<{ ok: true }>(`/jobs/${encodeURIComponent(jobId)}`, { method: "DELETE" }); }
 export function exportMoment(jobId: string, options: ExportOptions) { return api<{ exportId: string; url: string }>(`/jobs/${encodeURIComponent(jobId)}/export`, { method: "POST", body: JSON.stringify(options) }); }
+export function exportSubtitles(jobId: string, input: { clipOrder: number; trimStart?: number; trimEnd?: number }) { return api<{ url: string }>(`/jobs/${encodeURIComponent(jobId)}/subtitles`, { method: "POST", body: JSON.stringify(input) }); }
 export function saveUrl(url: string, name: string) {
   const native = (window as unknown as { ClipForgeNative?: { downloadFile?: (url: string, name: string) => void } }).ClipForgeNative;
   if (native?.downloadFile) { native.downloadFile(url, name); return; }
