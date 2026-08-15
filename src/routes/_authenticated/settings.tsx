@@ -1,23 +1,50 @@
-import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { Youtube, LogOut, Bell, Sparkles, Loader2, PlugZap, Activity, Mic } from "lucide-react";
+import { Bell, Download, Loader2, LogOut, PlugZap, RefreshCw, Youtube } from "lucide-react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { GradientCard } from "@/components/gradient-card";
 import { getYouTubeConnection, disconnectYouTube } from "@/lib/youtube.functions";
 import { YOUTUBE_PROVIDER_SCOPES } from "@/lib/youtube-provider";
 import { getSettings, updateSettings } from "@/lib/analytics.functions";
-import {
-  getWhisperProviderInfo,
-  setWhisperProviderPreference,
-  type WhisperProvider,
-} from "@/lib/worker-settings.functions";
 import { supabase } from "@/integrations/supabase/client";
 
 export const Route = createFileRoute("/_authenticated/settings")({
-  head: () => ({ meta: [{ title: "Settings — ClipForge AI" }] }),
+  head: () => ({ meta: [{ title: "Settings — ClipForge" }] }),
   component: SettingsPage,
 });
+
+type ReleaseInfo = {
+  tag_name: string;
+  html_url: string;
+  assets?: Array<{ name: string; browser_download_url: string }>;
+};
+
+function currentAppVersion() {
+  const native = (window as unknown as { ClipForgeNative?: { getAppVersion?: () => string } }).ClipForgeNative;
+  try {
+    const value = native?.getAppVersion?.();
+    if (value) return value;
+  } catch {}
+  const match = navigator.userAgent.match(/(?:^|\s)ClipForge\/([^\s]+)/);
+  return match?.[1] ?? "web";
+}
+
+function versionParts(value: string) {
+  return value.replace(/^v/i, "").split(/[.-]/).map((part) => Number(part)).filter(Number.isFinite).slice(0, 3);
+}
+
+function isNewer(latest: string, installed: string) {
+  if (installed === "web") return false;
+  const a = versionParts(latest);
+  const b = versionParts(installed);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const diff = (a[i] ?? 0) - (b[i] ?? 0);
+    if (diff !== 0) return diff > 0;
+  }
+  return false;
+}
 
 function SettingsPage() {
   const navigate = useNavigate();
@@ -26,12 +53,12 @@ function SettingsPage() {
   const disFn = useServerFn(disconnectYouTube);
   const sFn = useServerFn(getSettings);
   const upFn = useServerFn(updateSettings);
-  const whisperGetFn = useServerFn(getWhisperProviderInfo);
-  const whisperSetFn = useServerFn(setWhisperProviderPreference);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [release, setRelease] = useState<ReleaseInfo | null>(null);
+  const installedVersion = useMemo(() => currentAppVersion(), []);
 
   const yt = useQuery({ queryKey: ["yt-connection"], queryFn: () => ytFn(), refetchOnWindowFocus: true });
   const settings = useQuery({ queryKey: ["settings"], queryFn: () => sFn() });
-  const whisper = useQuery({ queryKey: ["whisper-provider"], queryFn: () => whisperGetFn() });
 
   const connect = useMutation({
     mutationFn: async () => {
@@ -40,31 +67,24 @@ function SettingsPage() {
       callback.searchParams.set("redirect", "/settings");
       callback.searchParams.set("youtube", "1");
       if (nativeShell) callback.searchParams.set("native", "1");
-
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: "google",
         options: {
           redirectTo: callback.toString(),
           skipBrowserRedirect: nativeShell,
           scopes: YOUTUBE_PROVIDER_SCOPES,
-          queryParams: {
-            access_type: "offline",
-            prompt: "consent",
-          },
+          queryParams: { access_type: "offline", prompt: "consent" },
         },
       });
       if (error) throw error;
       if (!data.url) throw new Error("Google did not return an authorization URL.");
-
       if (nativeShell && window.ClipForgeNative?.openExternal) {
         window.ClipForgeNative.openExternal(data.url);
         return;
       }
       window.location.assign(data.url);
     },
-    onError: (err: unknown) => {
-      toast.error(err instanceof Error ? err.message : "Could not start YouTube authorization");
-    },
+    onError: (err: unknown) => toast.error(err instanceof Error ? err.message : "Could not connect YouTube"),
   });
 
   const disconnect = useMutation({
@@ -80,16 +100,37 @@ function SettingsPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["settings"] }),
   });
 
-  const updWhisper = useMutation({
-    mutationFn: (provider: WhisperProvider) => whisperSetFn({ data: { provider } }),
-    onSuccess: (r) => {
-      toast.success(`Whisper provider set to ${r.provider}`);
-      qc.invalidateQueries({ queryKey: ["whisper-provider"] });
-    },
-    onError: (err: unknown) => {
-      toast.error(err instanceof Error ? err.message : "Failed to update provider");
-    },
-  });
+  async function checkUpdate() {
+    setCheckingUpdate(true);
+    try {
+      const response = await fetch("https://api.github.com/repos/WynnDev-rill/auto-vid-clipper/releases/latest", {
+        headers: { Accept: "application/vnd.github+json" },
+        cache: "no-store",
+      });
+      if (!response.ok) throw new Error(response.status === 404 ? "No APK release is published yet." : `Update check failed (${response.status})`);
+      const latest = (await response.json()) as ReleaseInfo;
+      setRelease(latest);
+      if (isNewer(latest.tag_name, installedVersion)) toast.success(`ClipForge ${latest.tag_name.replace(/^v/, "")} is available`);
+      else toast.success("ClipForge is up to date");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not check for updates");
+    } finally {
+      setCheckingUpdate(false);
+    }
+  }
+
+  function installUpdate() {
+    if (!release) return;
+    const apk = release.assets?.find((asset) => asset.name.toLowerCase().endsWith(".apk"));
+    const url = apk?.browser_download_url ?? release.html_url;
+    const native = (window as unknown as { ClipForgeNative?: { openUpdateUrl?: (url: string) => void } }).ClipForgeNative;
+    try {
+      if (native?.openUpdateUrl) native.openUpdateUrl(url);
+      else window.open(url, "_blank", "noopener,noreferrer");
+    } catch {
+      window.location.assign(release.html_url);
+    }
+  }
 
   async function signOut() {
     await qc.cancelQueries();
@@ -99,74 +140,56 @@ function SettingsPage() {
   }
 
   if (yt.isLoading || settings.isLoading || !yt.data || !settings.data) {
-    return (
-      <div className="grid place-items-center py-20">
-        <Loader2 className="animate-spin text-muted-foreground" />
-      </div>
-    );
+    return <div className="grid place-items-center py-20"><Loader2 className="animate-spin text-muted-foreground" /></div>;
   }
 
   const conn = yt.data.connection;
   const s = settings.data.settings;
+  const updateAvailable = release ? isNewer(release.tag_name, installedVersion) : false;
 
   return (
-    <div className="space-y-5">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-xs uppercase tracking-wide text-muted-foreground">Settings</p>
-          <h1 className="font-display text-2xl font-semibold md:text-3xl">Preferences & connections</h1>
-        </div>
-        <Link to="/diagnostics" className="inline-flex items-center gap-1.5 rounded-full border border-border px-3 py-1.5 text-xs">
-          <Activity size={12} /> Diagnostics
-        </Link>
+    <div className="mx-auto max-w-2xl space-y-5">
+      <div>
+        <p className="text-xs uppercase tracking-wide text-muted-foreground">ClipForge</p>
+        <h1 className="font-display text-2xl font-semibold md:text-3xl">Settings</h1>
       </div>
 
       <GradientCard>
         <div className="flex items-start gap-3">
-          <div className="grid size-11 place-items-center rounded-2xl bg-gradient-brand shadow-glow">
-            <Youtube size={18} className="text-primary-foreground" />
+          <div className="grid size-11 place-items-center rounded-2xl bg-gradient-brand shadow-glow"><Download size={18} className="text-primary-foreground" /></div>
+          <div className="min-w-0 flex-1">
+            <p className="font-semibold">App update</p>
+            <p className="mt-1 text-sm text-muted-foreground">Installed: {installedVersion === "web" ? "Web app" : `v${installedVersion}`}</p>
+            {release ? <p className={`mt-1 text-xs ${updateAvailable ? "text-brand-cyan" : "text-muted-foreground"}`}>{updateAvailable ? `${release.tag_name} is ready to install` : `Latest: ${release.tag_name}`}</p> : null}
+            <div className="mt-3 flex gap-2">
+              <button onClick={checkUpdate} disabled={checkingUpdate} className="inline-flex items-center gap-1.5 rounded-full border border-border px-3 py-1.5 text-xs font-semibold disabled:opacity-60">
+                {checkingUpdate ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />} Check update
+              </button>
+              {updateAvailable ? <button onClick={installUpdate} className="rounded-full bg-gradient-brand px-3 py-1.5 text-xs font-semibold text-primary-foreground shadow-glow">Update</button> : null}
+            </div>
           </div>
+        </div>
+      </GradientCard>
+
+      <GradientCard>
+        <div className="flex items-start gap-3">
+          <div className="grid size-11 place-items-center rounded-2xl bg-gradient-brand shadow-glow"><Youtube size={18} className="text-primary-foreground" /></div>
           <div className="flex-1">
-            <p className="font-semibold">YouTube channel</p>
+            <p className="font-semibold">YouTube publishing</p>
             {conn ? (
               <>
                 <p className="mt-1 text-sm text-muted-foreground">{conn.channel_title}</p>
-                <p className={`mt-1 text-xs ${yt.data.ready ? "text-success" : "text-warning"}`}>
-                  {yt.data.ready
-                    ? "Ready. Newly generated clips will be uploaded automatically as Unlisted."
-                    : "Authorization expired. Reconnect before generating new clips."}
-                </p>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {!yt.data.ready ? (
-                    <button
-                      onClick={() => connect.mutate()}
-                      disabled={connect.isPending}
-                      className="inline-flex items-center gap-1.5 rounded-full bg-gradient-brand px-3 py-1.5 text-xs font-semibold text-primary-foreground shadow-glow disabled:opacity-60"
-                    >
-                      {connect.isPending ? <Loader2 size={12} className="animate-spin" /> : <PlugZap size={12} />}
-                      Reconnect YouTube
-                    </button>
-                  ) : null}
-                  <button
-                    onClick={() => disconnect.mutate()}
-                    className="rounded-full border border-destructive/40 bg-destructive/10 px-3 py-1.5 text-xs text-destructive"
-                  >
-                    Disconnect
-                  </button>
+                <p className="mt-1 text-xs text-muted-foreground">Clips are never uploaded automatically. You choose Publish from a result.</p>
+                <div className="mt-3 flex gap-2">
+                  {!yt.data.ready ? <button onClick={() => connect.mutate()} disabled={connect.isPending} className="inline-flex items-center gap-1.5 rounded-full bg-gradient-brand px-3 py-1.5 text-xs font-semibold text-primary-foreground"><PlugZap size={12} /> Reconnect</button> : null}
+                  <button onClick={() => disconnect.mutate()} className="rounded-full border border-destructive/40 bg-destructive/10 px-3 py-1.5 text-xs text-destructive">Disconnect</button>
                 </div>
               </>
             ) : (
               <>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Connect Google once to grant YouTube upload permission. ClipForge will then upload newly generated clips automatically as Unlisted.
-                </p>
-                <button
-                  onClick={() => connect.mutate()}
-                  disabled={connect.isPending}
-                  className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-gradient-brand px-3 py-1.5 text-xs font-semibold text-primary-foreground shadow-glow disabled:opacity-60"
-                >
-                  {connect.isPending ? <Loader2 size={12} className="animate-spin" /> : <PlugZap size={12} />}
-                  Connect YouTube
+                <p className="mt-1 text-sm text-muted-foreground">Optional. Connect YouTube only if you want to publish a selected moment from ClipForge.</p>
+                <button onClick={() => connect.mutate()} disabled={connect.isPending} className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-gradient-brand px-3 py-1.5 text-xs font-semibold text-primary-foreground shadow-glow disabled:opacity-60">
+                  {connect.isPending ? <Loader2 size={12} className="animate-spin" /> : <PlugZap size={12} />} Connect YouTube
                 </button>
               </>
             )}
@@ -175,99 +198,16 @@ function SettingsPage() {
       </GradientCard>
 
       <GradientCard>
-        <div className="flex items-start gap-3">
-          <div className="grid size-11 place-items-center rounded-2xl bg-gradient-brand-soft">
-            <Sparkles size={18} className="text-brand-purple" />
-          </div>
-          <div className="flex-1">
-            <p className="font-semibold">Highlight engine</p>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Uses the configured AI scorer when available, with a deterministic fallback so generation does not fail just because an AI gateway is unavailable.
-            </p>
-          </div>
-        </div>
-      </GradientCard>
-
-      <GradientCard>
-        <div className="flex items-start gap-3">
-          <div className="grid size-11 place-items-center rounded-2xl bg-gradient-brand-soft">
-            <Mic size={18} className="text-brand-purple" />
-          </div>
-          <div className="flex-1">
-            <p className="font-semibold">Whisper provider</p>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Auto tries Groq → OpenAI → OpenRouter. If every provider is unavailable, ClipForge falls back to subtitle-free clip selection instead of killing the whole job.
-            </p>
-
-            {whisper.isLoading ? (
-              <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
-                <Loader2 size={12} className="animate-spin" /> Loading provider settings…
-              </div>
-            ) : !whisper.data?.configured ? (
-              <p className="mt-3 text-xs text-destructive">Render worker is not reachable.</p>
-            ) : (
-              <>
-                <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-                  {(["auto", "groq", "openai", "openrouter"] as WhisperProvider[]).map((p) => {
-                    const active = whisper.data!.provider === p;
-                    const disabled = p !== "auto" && !whisper.data!.available[p as "groq" | "openai" | "openrouter"];
-                    return (
-                      <button
-                        key={p}
-                        onClick={() => updWhisper.mutate(p)}
-                        disabled={disabled || updWhisper.isPending}
-                        className={`rounded-xl border px-3 py-2 text-xs font-semibold capitalize transition ${
-                          active
-                            ? "border-transparent bg-gradient-brand text-primary-foreground shadow-glow"
-                            : "border-border bg-secondary/40 text-foreground"
-                        } disabled:opacity-40`}
-                      >
-                        {p === "auto" ? "Auto (Recommended)" : p}
-                      </button>
-                    );
-                  })}
-                </div>
-                <div className="mt-3 space-y-1 text-xs text-muted-foreground">
-                  <p>
-                    Selected: <span className="font-semibold text-foreground">{whisper.data.provider}</span>
-                    {whisper.data.lastUsedProvider ? <>{" · Last used: "}<span className="font-semibold text-brand-cyan">{whisper.data.lastUsedProvider}</span></> : null}
-                  </p>
-                  <p>
-                    Keys detected: {(["groq", "openai", "openrouter"] as const)
-                      .map((k) => `${k}: ${whisper.data!.available[k] ? "✓" : "—"}`)
-                      .join(" · ")}
-                  </p>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      </GradientCard>
-
-      <GradientCard>
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <div className="grid size-11 place-items-center rounded-2xl bg-secondary"><Bell size={18} /></div>
-            <div>
-              <p className="font-semibold">Notifications</p>
-              <p className="text-sm text-muted-foreground">Job status toasts</p>
-            </div>
+            <div><p className="font-semibold">Notifications</p><p className="text-sm text-muted-foreground">Processing status alerts</p></div>
           </div>
-          <input
-            type="checkbox"
-            checked={!!s.notifications_enabled}
-            onChange={(e) => updSettings.mutate({ notifications_enabled: e.target.checked })}
-            className="size-5 accent-[oklch(0.68_0.22_295)]"
-          />
+          <input type="checkbox" checked={!!s.notifications_enabled} onChange={(e) => updSettings.mutate({ notifications_enabled: e.target.checked })} className="size-5 accent-[oklch(0.68_0.22_295)]" />
         </div>
       </GradientCard>
 
-      <button
-        onClick={signOut}
-        className="flex w-full items-center justify-center gap-2 rounded-2xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm font-semibold text-destructive"
-      >
-        <LogOut size={16} /> Sign out
-      </button>
+      <button onClick={signOut} className="flex w-full items-center justify-center gap-2 rounded-2xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm font-semibold text-destructive"><LogOut size={16} /> Sign out</button>
     </div>
   );
 }
