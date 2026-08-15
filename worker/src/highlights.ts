@@ -1,162 +1,115 @@
-import type { Segment } from "./whisper.js";
+import type { MediaSignals } from "./media-analysis.js";
+import type { ScoreBreakdown, Segment } from "./types.js";
 
 export type Highlight = {
   start_s: number;
   end_s: number;
-  reason: string;
+  text: string;
   score: number;
+  score_breakdown: ScoreBreakdown;
+  reason: string;
   signals: string[];
 };
 
-const GATEWAY_URL = "https://ai.gateway.lovable.dev/v1/chat/completions";
+const HOOK = /\b(why|how|secret|mistake|never|truth|problem|biggest|best|worst|important|ternyata|kenapa|bagaimana|rahasia|kesalahan|jangan|fakta|masalah|terbaik|terburuk|penting|bayangkan|coba pikir)\b/i;
+const EMOTION = /\b(love|hate|angry|afraid|fear|shocked|crazy|amazing|pain|happy|sad|laugh|funny|wow|cinta|benci|marah|takut|kaget|gila|hebat|sakit|senang|sedih|lucu|anjir|gokil)\b/i;
+const TURN = /\b(but|however|until|then|because|therefore|actually|instead|tapi|namun|sampai|kemudian|karena|jadi|ternyata|justru|sebaliknya)\b/i;
+const VALUE = /\b(step|tip|reason|example|result|lesson|cara|tips|alasan|contoh|hasil|pelajaran|solusi|strategi|metode)\b/i;
 
-function words(text: string) {
-  return text.toLowerCase().match(/[\p{L}\p{N}']+/gu) ?? [];
+function tokens(text: string) { return text.toLowerCase().match(/[\p{L}\p{N}']+/gu) ?? []; }
+function clamp(value: number, min: number, max: number) { return Math.max(min, Math.min(max, value)); }
+function jaccard(a: string, b: string) {
+  const aa = new Set(tokens(a)), bb = new Set(tokens(b));
+  if (!aa.size || !bb.size) return 0;
+  let intersection = 0;
+  for (const token of aa) if (bb.has(token)) intersection++;
+  return intersection / (aa.size + bb.size - intersection);
+}
+function overlapRatio(start: number, end: number, rangeStart: number, rangeEnd: number) {
+  const overlap = Math.max(0, Math.min(end, rangeEnd) - Math.max(start, rangeStart));
+  return overlap / Math.max(0.1, end - start);
 }
 
-function heuristicSignals(text: string) {
-  const lower = text.toLowerCase();
+function scoreCandidate(text: string, start: number, end: number, goal: string | undefined, media: MediaSignals) {
+  const duration = Math.max(1, end - start);
+  const wordCount = tokens(text).length;
+  const density = wordCount / duration;
   const signals: string[] = [];
-  if (/\b(why|how|secret|mistake|never|always|truth|problem|biggest|best|worst|important)\b/.test(lower)) signals.push("strong-hook");
-  if (/\b(love|hate|angry|afraid|fear|shocked|crazy|amazing|pain|happy|sad|laugh|funny|wow)\b/.test(lower)) signals.push("emotion");
-  if (/\b(but|however|until|then|because|therefore|actually|instead)\b/.test(lower)) signals.push("story-turn");
-  if (/[!?]/.test(text)) signals.push("high-energy");
-  if (/\b\d+(?:\.\d+)?%?\b/.test(text)) signals.push("specificity");
-  return signals;
+
+  const hook = clamp((HOOK.test(text) ? 14 : 5) + (/^[^.!?]{0,80}[?!]/.test(text) ? 4 : 0) + (wordCount >= 18 ? 2 : 0), 0, 20);
+  if (hook >= 14) signals.push("strong-hook");
+  const context = clamp((/[.!?…]["')\]]?$/.test(text.trim()) ? 10 : 5) + (duration >= 14 ? 3 : 1) + (TURN.test(text) ? 2 : 0), 0, 15);
+  if (context >= 12) signals.push("self-contained");
+  const emotion = clamp((EMOTION.test(text) ? 11 : 3) + ((text.match(/[!?]/g)?.length ?? 0) * 2), 0, 15);
+  if (emotion >= 10) signals.push("emotion");
+  const value = clamp((VALUE.test(text) ? 8 : 3) + (/\b\d+(?:[.,]\d+)?%?\b/.test(text) ? 4 : 0) + (TURN.test(text) ? 3 : 0), 0, 15);
+  if (value >= 11) signals.push("high-value");
+  const pacing = clamp(15 - Math.abs(density - 2.6) * 5, 2, 15);
+  if (pacing >= 12) signals.push("good-pacing");
+
+  const sceneCount = media.sceneCuts.filter((time) => time > start && time < end).length;
+  const nearScene = media.sceneCuts.some((time) => Math.abs(time - start) < 1.2 || Math.abs(time - end) < 1.2);
+  let visual = clamp(3 + Math.min(5, sceneCount * 2) + (nearScene ? 2 : 0), 0, 10);
+  if (visual >= 7) signals.push("visual-change");
+  const silenceShare = media.silenceRanges.reduce((sum, range) => sum + overlapRatio(start, end, range.start, range.end), 0);
+  if (silenceShare > 0.18) { visual = Math.max(0, visual - 2); signals.push("pause-heavy"); }
+
+  let prompt = 5;
+  if (goal?.trim()) {
+    const goalTokens = new Set(tokens(goal).filter((token) => token.length >= 3));
+    const bodyTokens = new Set(tokens(text));
+    let matches = 0;
+    for (const token of goalTokens) if (bodyTokens.has(token)) matches++;
+    prompt = clamp(goalTokens.size ? Math.round((matches / goalTokens.size) * 10) : 5, 0, 10);
+    if (prompt >= 6) signals.push("prompt-match");
+  }
+
+  const breakdown: ScoreBreakdown = {
+    hook: Math.round(hook), context: Math.round(context), emotion: Math.round(emotion), value: Math.round(value),
+    pacing: Math.round(pacing), visual: Math.round(visual), prompt: Math.round(prompt),
+  };
+  const total = clamp(Math.round(Object.values(breakdown).reduce((sum, score) => sum + score, 0)), 0, 100);
+  const reasonParts = [
+    breakdown.hook >= 14 ? "strong opening" : null,
+    breakdown.context >= 12 ? "complete context" : null,
+    breakdown.emotion >= 10 ? "emotional energy" : null,
+    breakdown.value >= 11 ? "clear value" : null,
+    breakdown.visual >= 7 ? "visual change" : null,
+    breakdown.prompt >= 6 && goal ? "matches your request" : null,
+  ].filter(Boolean);
+  return { total, breakdown, signals: signals.length ? signals : ["context-complete"], reason: reasonParts.slice(0, 3).join(", ") || "Dense, self-contained moment" };
 }
 
-function candidateWindows(segments: Segment[], target: number): Highlight[] {
-  if (!segments.length) return [];
+export function scoreHighlights(opts: { segments: Segment[]; totalDuration: number; clipDuration: number; count: number; goal?: string; media: MediaSignals }) {
   const candidates: Highlight[] = [];
-  const desiredMin = Math.max(8, target * 0.55);
-  const desiredMax = target * 1.35;
-
-  for (let i = 0; i < segments.length; i++) {
+  const minDuration = Math.max(10, opts.clipDuration * 0.5);
+  const maxDuration = Math.min(120, opts.clipDuration * 1.55);
+  for (let i = 0; i < opts.segments.length; i++) {
     let text = "";
-    let end = segments[i].end;
-    for (let j = i; j < segments.length; j++) {
-      end = segments[j].end;
-      const duration = end - segments[i].start;
-      if (duration > desiredMax) break;
-      text += `${text ? " " : ""}${segments[j].text.trim()}`;
-      if (duration < desiredMin) continue;
-
-      const tokenCount = words(text).length;
-      if (tokenCount < 12) continue;
-      const signals = heuristicSignals(text);
-      const density = Math.min(18, Math.round((tokenCount / Math.max(1, duration)) * 6));
-      const completeness = /[.!?]["')\]]?$/.test(text.trim()) ? 10 : 4;
-      const hook = signals.includes("strong-hook") ? 18 : 5;
-      const emotion = signals.includes("emotion") ? 14 : 3;
-      const turn = signals.includes("story-turn") ? 12 : 2;
-      const energy = signals.includes("high-energy") ? 10 : 2;
-      const specificity = signals.includes("specificity") ? 8 : 1;
-      const lengthFit = Math.max(0, 12 - Math.round(Math.abs(duration - target) / Math.max(4, target) * 12));
-      const score = Math.max(25, Math.min(92, 20 + density + completeness + hook + emotion + turn + energy + specificity + lengthFit));
-
+    for (let j = i; j < opts.segments.length; j++) {
+      const start = opts.segments[i].start, end = opts.segments[j].end, duration = end - start;
+      if (duration > maxDuration) break;
+      text += `${text ? " " : ""}${opts.segments[j].text.trim()}`;
+      if (duration < minDuration || tokens(text).length < 12) continue;
+      const scored = scoreCandidate(text, start, end, opts.goal, opts.media);
+      const lengthPenalty = Math.min(8, Math.abs(duration - opts.clipDuration) / Math.max(8, opts.clipDuration) * 8);
       candidates.push({
-        start_s: Math.max(0, segments[i].start - 0.15),
-        end_s: end + 0.2,
-        reason: signals.length ? `Strong ${signals.slice(0, 3).join(", ").replaceAll("-", " ")}` : "Complete, information-dense moment",
-        score,
-        signals: signals.length ? signals : ["context-complete"],
+        start_s: Math.max(0, start - 0.18), end_s: Math.min(opts.totalDuration, end + 0.22), text,
+        score: clamp(Math.round(scored.total - lengthPenalty), 0, 100), score_breakdown: scored.breakdown,
+        reason: scored.reason, signals: scored.signals,
       });
     }
   }
-  return candidates;
-}
-
-function overlaps(a: Highlight, b: Highlight) {
-  const overlap = Math.max(0, Math.min(a.end_s, b.end_s) - Math.max(a.start_s, b.start_s));
-  return overlap > Math.min(a.end_s - a.start_s, b.end_s - b.start_s) * 0.35;
-}
-
-function rankedHeuristicHighlights(opts: {
-  segments: Segment[];
-  totalDuration: number;
-  clipDuration: number;
-  count: number;
-}): Highlight[] {
-  const candidates = candidateWindows(opts.segments, opts.clipDuration)
-    .map((h) => ({ ...h, end_s: Math.min(opts.totalDuration, h.end_s) }))
-    .sort((a, b) => b.score - a.score);
-  const picked: Highlight[] = [];
+  candidates.sort((a, b) => b.score - a.score);
+  const selected: Highlight[] = [];
   for (const candidate of candidates) {
-    if (picked.some((item) => overlaps(item, candidate))) continue;
-    picked.push(candidate);
-    if (picked.length >= opts.count) break;
-  }
-  return picked.sort((a, b) => b.score - a.score);
-}
-
-export async function scoreHighlights(opts: {
-  segments: Segment[];
-  totalDuration: number;
-  clipDuration: number;
-  count: number;
-  goal?: string;
-}): Promise<Highlight[]> {
-  const heuristic = rankedHeuristicHighlights(opts);
-  const key = process.env.LOVABLE_API_KEY;
-  if (!key || opts.segments.length === 0) return heuristic;
-
-  const compact = opts.segments
-    .map((s) => `[${s.start.toFixed(1)}-${s.end.toFixed(1)}] ${s.text.trim()}`)
-    .join("\n")
-    .slice(0, 120_000);
-  const model = process.env.LOVABLE_MODEL || "google/gemini-3-flash-preview";
-  const system =
-    "You are a short-form video moment ranker. Find self-contained moments worth reviewing, not random intervals. " +
-    "Judge hook strength, context completeness, emotion/surprise, information value, pacing, and ending quality. " +
-    "Reply as strict JSON only: " +
-    '{"highlights":[{"start_s":number,"end_s":number,"score":number,"reason":string,"signals":[string]}]}. ' +
-    "Score is 0-100 and must be discriminative. Do not overlap highlights. Never invent timestamps outside the transcript.";
-  const goal = opts.goal ? `User preference: ${opts.goal}\n` : "";
-  const user =
-    `Source duration: ${opts.totalDuration.toFixed(1)}s. Target length: about ${opts.clipDuration}s; natural boundaries matter more than exact length. ` +
-    `Return up to ${opts.count} strongest candidates ranked best first.\n${goal}\nTranscript:\n${compact}`;
-
-  try {
-    const res = await fetch(GATEWAY_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Lovable-API-Key": key },
-      body: JSON.stringify({
-        model,
-        response_format: { type: "json_object" },
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-      }),
-      signal: AbortSignal.timeout(45_000),
+    const temporalOverlap = selected.some((item) => {
+      const overlap = Math.max(0, Math.min(item.end_s, candidate.end_s) - Math.max(item.start_s, candidate.start_s));
+      return overlap > Math.min(item.end_s - item.start_s, candidate.end_s - candidate.start_s) * 0.32;
     });
-    if (!res.ok) throw new Error(`Lovable AI ${res.status}: ${await res.text()}`);
-    const data = (await res.json()) as { choices: Array<{ message: { content: string } }> };
-    const parsed = JSON.parse(data.choices?.[0]?.message?.content ?? "{}") as { highlights?: Partial<Highlight>[] };
-    const cleaned = (parsed.highlights ?? [])
-      .map((h) => {
-        const start = Math.max(0, Math.min(opts.totalDuration - 1, Number(h.start_s) || 0));
-        let end = Math.max(start + 5, Math.min(opts.totalDuration, Number(h.end_s) || start + opts.clipDuration));
-        if (end - start > opts.clipDuration * 1.6) end = start + opts.clipDuration * 1.6;
-        return {
-          start_s: start,
-          end_s: Math.min(opts.totalDuration, end),
-          score: Math.max(0, Math.min(100, Math.round(Number(h.score) || 50))),
-          reason: String(h.reason || "Strong candidate moment").slice(0, 180),
-          signals: Array.isArray(h.signals) ? h.signals.map(String).slice(0, 5) : [],
-        } satisfies Highlight;
-      })
-      .sort((a, b) => b.score - a.score);
-
-    const picked: Highlight[] = [];
-    for (const candidate of cleaned) {
-      if (picked.some((item) => overlaps(item, candidate))) continue;
-      picked.push(candidate);
-      if (picked.length >= opts.count) break;
-    }
-    return picked.length >= Math.min(3, opts.count) ? picked : heuristic;
-  } catch (error) {
-    console.error("[highlights] AI ranker failed; using transcript heuristic:", error);
-    return heuristic;
+    if (temporalOverlap || selected.some((item) => jaccard(item.text, candidate.text) > 0.72)) continue;
+    selected.push(candidate);
+    if (selected.length >= opts.count) break;
   }
+  return selected;
 }
