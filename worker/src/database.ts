@@ -130,7 +130,7 @@ export async function storeMediaStream(id: string, filename: string, contentType
   try {
     await client.query("BEGIN");
     await resetMedia(client, id, filename, contentType);
-    let pending = Buffer.alloc(0), size = 0, index = 0;
+    let pending: any = Buffer.alloc(0), size = 0, index = 0;
     for await (const raw of readable as AsyncIterable<Buffer | Uint8Array | string>) {
       const chunk = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
       size += chunk.length;
