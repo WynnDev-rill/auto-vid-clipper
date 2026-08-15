@@ -9,6 +9,7 @@ on:
       - "capacitor.config.json"
       - "native-shell/**"
       - "scripts/configure-clipforge-android.mjs"
+      - "scripts/fix-clipforge-generated-java.mjs"
       - ".github/workflows/android-apk.yml"
 
 permissions:
@@ -65,11 +66,16 @@ jobs:
           npx cap add android
           npx cap sync android
           node scripts/configure-clipforge-android.mjs
+          node scripts/fix-clipforge-generated-java.mjs
           test -f android/app/src/main/java/com/wynndev/clipforge/MainActivity.java
           grep -q 'package com.wynndev.clipforge' android/app/src/main/java/com/wynndev/clipforge/MainActivity.java
           grep -q 'ClipForgeNative' android/app/src/main/java/com/wynndev/clipforge/MainActivity.java
           grep -q 'downloadFile' android/app/src/main/java/com/wynndev/clipforge/MainActivity.java
           grep -q 'getAppVersion' android/app/src/main/java/com/wynndev/clipforge/MainActivity.java
+          grep -q 'storeSecret' android/app/src/main/java/com/wynndev/clipforge/MainActivity.java
+          grep -q 'downloadSource' android/app/src/main/java/com/wynndev/clipforge/MainActivity.java
+          grep -q 'beginDownload' android/app/src/main/java/com/wynndev/clipforge/MainActivity.java
+          grep -q 'httpRequest' android/app/src/main/java/com/wynndev/clipforge/MainActivity.java
           grep -Fq 'setDecorFitsSystemWindows(getWindow(), false)' android/app/src/main/java/com/wynndev/clipforge/MainActivity.java
 
       - name: Restore Gradle caches
