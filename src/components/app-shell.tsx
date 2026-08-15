@@ -1,15 +1,12 @@
 import { Link, useRouterState } from "@tanstack/react-router";
-import { Home, Wand2, History, BarChart3, Settings, ListTodo } from "lucide-react";
+import { FolderClock, Settings, Sparkles } from "lucide-react";
 import type { ReactNode } from "react";
 import { Logo } from "./logo";
 import { cn } from "@/lib/utils";
 
 const NAV = [
-  { to: "/dashboard", label: "Home", icon: Home },
-  { to: "/create", label: "Create", icon: Wand2 },
-  { to: "/jobs", label: "Jobs", icon: ListTodo },
-  { to: "/history", label: "History", icon: History },
-  { to: "/analytics", label: "Stats", icon: BarChart3 },
+  { to: "/create", label: "Create", icon: Sparkles },
+  { to: "/jobs", label: "Projects", icon: FolderClock },
   { to: "/settings", label: "Settings", icon: Settings },
 ] as const;
 
@@ -20,7 +17,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     <div className="min-h-dvh bg-background">
       <header className="sticky top-0 z-40 border-b border-white/8 bg-[#071022]">
         <div className="mx-auto flex h-[68px] max-w-6xl items-center justify-between px-4 md:h-[76px] md:px-6">
-          <Link to="/dashboard" className="focus:outline-none" aria-label="ClipForge home">
+          <Link to="/create" className="focus:outline-none" aria-label="ClipForge create">
             <Logo size={20} />
           </Link>
           <nav className="hidden gap-1 md:flex">
@@ -47,13 +44,13 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
       </header>
 
-      <main className="mx-auto max-w-6xl px-4 pb-[116px] pt-5 md:px-6 md:pb-10">{children}</main>
+      <main className="mx-auto max-w-6xl px-4 pb-[104px] pt-5 md:px-6 md:pb-10">{children}</main>
 
       <nav
         className="fixed inset-x-0 bottom-0 z-50 border-t border-white/10 bg-[#071022] md:hidden"
         aria-label="Main navigation"
       >
-        <div className="mx-auto flex h-[88px] max-w-xl items-stretch px-1 pb-1">
+        <div className="mx-auto flex h-[78px] max-w-xl items-stretch px-4 pb-1">
           {NAV.map((item) => {
             const active = pathname.startsWith(item.to);
             const Icon = item.icon;
@@ -62,7 +59,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 key={item.to}
                 to={item.to}
                 className={cn(
-                  "relative flex min-w-0 flex-1 flex-col items-center justify-center gap-1.5 px-1 text-[10px] font-medium leading-none transition-colors",
+                  "relative flex min-w-0 flex-1 flex-col items-center justify-center gap-1.5 px-1 text-[11px] font-medium leading-none transition-colors",
                   active ? "text-brand-blue" : "text-muted-foreground",
                 )}
               >
