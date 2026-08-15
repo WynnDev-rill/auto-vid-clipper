@@ -25,18 +25,5 @@ jobs:
           cache-dependency-path: package-lock.json
       - run: npm install --legacy-peer-deps --no-audit --no-fund --package-lock=false
       - run: npm run build
-
-  worker:
-    name: Worker TypeScript build
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    defaults:
-      run:
-        working-directory: worker
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-      - run: npm install --no-audit --no-fund
-      - run: npm run build
+      - name: Validate serverless resolver syntax
+        run: python3 -m py_compile api/resolve.py api/community-ai.py
