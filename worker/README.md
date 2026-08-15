@@ -1,63 +1,50 @@
-# ClipForge Worker
+# ClipForge Worker V3
 
-Real video-to-shorts pipeline for ClipForge AI. Runs outside Cloudflare Workers
-because it needs FFmpeg, filesystem access, and long-running HTTP.
+ClipForge's long-running video processor. It is independent of Supabase and does not require AI-provider API keys.
 
 ## Pipeline
 
-1. **Download** the source video (YouTube URL via `@distube/ytdl-core`, or a
-   direct URL / uploaded file).
-2. **Transcribe** the audio with OpenAI Whisper (`whisper-1`), with word-level
-   timestamps.
-3. **Score highlights** by sending transcript segments to Lovable AI Gateway
-   (Gemini) and asking for the top N viral moments with `start_s` / `end_s`.
-4. **Render** each highlight with FFmpeg:
-   - Extract `[start_s, end_s]`
-   - Crop/scale to 9:16 (1080x1920), keeping the center of the source frame
-   - Burn subtitles from the Whisper words (ASS with karaoke-style highlight)
-   - Emit an MP4 + a JPG thumbnail
-5. **Serve** the artifacts from `GET /media/:jobId/:file`.
+1. Resolve URL sources with **yt-dlp** or accept direct uploads.
+2. Extract mono 16 kHz audio with **FFmpeg**.
+3. Transcribe locally with **whisper.cpp**.
+4. Detect scene changes and silence with FFmpeg.
+5. Rank candidate moments locally using hook, context, emotion, information value, pacing, visual changes, prompt relevance, and diversity.
+6. Render lightweight previews for review.
+7. Render full-quality output only after the user selects/exports a moment.
 
-## HTTP contract
+## HTTP API
 
-Matches `src/lib/backend.server.ts` in the Lovable app.
+The app creates a random installation ID and sends it in `X-Device-Id`. No account or provider key is required.
 
-```
-POST /jobs                        Authorization: Bearer $BACKEND_SECRET
-  { sourceUrl, clipDuration, clipCount, userId, jobId }
-  -> 200 { id }
+- `GET /health`
+- `PUT /uploads/:id`
+- `POST /jobs`
+- `GET /jobs`
+- `GET /jobs/:id`
+- `POST /jobs/:id/retry`
+- `POST /jobs/:id/cancel`
+- `DELETE /jobs/:id`
+- `POST /jobs/:id/export`
+- `GET /media/:id`
 
-GET  /jobs/:id                    Authorization: Bearer $BACKEND_SECRET
-  -> 200 { id, status, progress, clips?: [{ order, video_url, thumbnail_url, duration_s, transcript }], error? }
-```
+Job status moves through `queued → downloading → transcribing → analyzing → rendering → done`, with `failed` and `cancelled` terminal states.
 
-`status` moves through: `queued` → `transcribing` → `analyzing` → `rendering` → `done` (or `failed`).
+## Storage
 
-## Setup
+If `DATABASE_URL` is configured, jobs, uploads, transcripts, previews and exports are stored in PostgreSQL and survive worker restarts. Media is chunked so the worker only uses local disk as temporary scratch space.
+
+Without `DATABASE_URL`, V3 falls back to local state/media storage. This is convenient for local development but should not be considered durable on ephemeral hosts.
+
+## Local setup
 
 ```bash
-cp .env.example .env    # fill OPENAI_API_KEY, LOVABLE_API_KEY, BACKEND_SECRET
+cp .env.example .env
 npm install
 npm run dev
 ```
 
-Requires `ffmpeg` + `ffprobe` on `$PATH` (Docker image includes them).
+No OpenAI, Groq, OpenRouter, Lovable or Supabase credentials are needed.
 
-## Deploy
+## Deployment
 
-Any host that runs Node 20 + ffmpeg with persistent disk works: Render,
-Railway, Fly.io, a VPS. The `Dockerfile` is ready to push.
-
-Once deployed, set two env vars on the Lovable app:
-
-- `CLIPFORGE_BACKEND_URL` — e.g. `https://clipforge-worker.example.com`
-- `CLIPFORGE_BACKEND_SECRET` — same value as the worker's `BACKEND_SECRET`
-
-## Notes
-
-- Job state is persisted atomically in `$STATE_DIR/jobs.json` (outside the
-  publicly served `$WORK_DIR`). Active jobs are marked failed after a restart
-  so callers can retry them rather than polling work that is no longer running.
-  Multi-instance deployments should use a shared Redis or Postgres store instead.
-- Rendered clips live on the worker's disk under `$WORK_DIR/<jobId>/`. Clean
-  them up on a cron or move to S3/R2 if you need durable storage.
+The worker runs on Node and can be packaged for Cloud Run, Render, Railway, Fly.io or a VPS. `worker/Dockerfile` is included. For production, use a restart-safe job/worker environment plus persistent PostgreSQL/object storage where available.

@@ -1,100 +1,35 @@
-import fs from "node:fs";
-import path from "node:path";
+import { loadJobs, saveJob, listJobsForDevice as listPersistentJobs, deleteJobRow } from "./database.js";
+import type { Job } from "./types.js";
 
-export type ClipResult = {
-  order: number;
-  video_url: string;
-  thumbnail_url: string;
-  duration_s: number;
-  transcript?: string;
-  score?: number;
-  reason?: string;
-  signals?: string[];
-};
+const jobs = new Map<string, Job>();
 
-export type JobStatus =
-  | "queued"
-  | "transcribing"
-  | "analyzing"
-  | "rendering"
-  | "cancel_requested"
-  | "cancelled"
-  | "done"
-  | "failed";
-
-export type Job = {
-  id: string;
-  appJobId: string;
-  userId: string;
-  sourceUrl?: string;
-  clipDuration: number;
-  clipCount: number;
-  goal?: string;
-  status: JobStatus;
-  progress: number;
-  clips: ClipResult[];
-  error?: string;
-  createdAt: number;
-  startedAt: number;
-  updatedAt: number;
-  stageStartedAt: number;
-  sourceDurationS?: number;
-  completedClips: number;
-  estimatedRemainingS?: number;
-};
-
-const WORK_DIR = path.resolve(process.env.WORK_DIR || "./.work");
-const STORE_DIR = path.resolve(process.env.STATE_DIR || path.join(path.dirname(WORK_DIR), ".clipforge-state"));
-const STORE_FILE = path.join(STORE_DIR, "jobs.json");
-fs.mkdirSync(STORE_DIR, { recursive: true });
-
-function loadJobs(): Map<string, Job> {
-  try {
-    const rows = JSON.parse(fs.readFileSync(STORE_FILE, "utf8")) as Job[];
-    return new Map(rows.map((job) => [job.id, job]));
-  } catch {
-    return new Map();
+export async function initStore() {
+  for (const job of await loadJobs()) jobs.set(job.id, job);
+  for (const job of jobs.values()) {
+    if (["downloading", "transcribing", "analyzing", "rendering"].includes(job.status)) {
+      Object.assign(job, {
+        status: "queued",
+        progress: Math.min(job.progress || 1, 8),
+        completedClips: 0,
+        estimatedRemainingS: undefined,
+        updatedAt: Date.now(),
+        stageStartedAt: Date.now(),
+      } satisfies Partial<Job>);
+      void saveJob(job).catch((error) => console.error("[store] recovery persist failed", error));
+    } else if (job.status === "cancel_requested") {
+      job.status = "cancelled";
+      job.updatedAt = Date.now();
+      job.stageStartedAt = Date.now();
+      void saveJob(job).catch((error) => console.error("[store] cancel recovery persist failed", error));
+    }
   }
 }
 
-const jobs = loadJobs();
-
-function persist() {
-  const tmp = `${STORE_FILE}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify([...jobs.values()], null, 2));
-  fs.renameSync(tmp, STORE_FILE);
+function persist(job: Job) {
+  void saveJob(job).catch((error) => console.error(`[store] persist failed for ${job.id}:`, error));
 }
 
-// A Render restart cannot resume FFmpeg mid-command, but it can safely restart
-// the deterministic pipeline from the source URL. Preserve pending jobs rather
-// than silently converting every restart into a permanent user-facing failure.
-for (const job of jobs.values()) {
-  if (["transcribing", "analyzing", "rendering"].includes(job.status)) {
-    jobs.set(job.id, {
-      ...job,
-      status: "queued",
-      progress: 1,
-      clips: [],
-      completedClips: 0,
-      estimatedRemainingS: undefined,
-      updatedAt: Date.now(),
-      stageStartedAt: Date.now(),
-    });
-  } else if (job.status === "cancel_requested") {
-    jobs.set(job.id, {
-      ...job,
-      status: "cancelled",
-      estimatedRemainingS: 0,
-      updatedAt: Date.now(),
-      stageStartedAt: Date.now(),
-    });
-  }
-}
-if (jobs.size) persist();
-
-export function createJob(
-  init: Omit<Job, "status" | "progress" | "clips" | "createdAt" | "startedAt" | "updatedAt" | "stageStartedAt" | "completedClips">,
-): Job {
+export function createJob(init: Omit<Job, "status" | "progress" | "clips" | "createdAt" | "startedAt" | "updatedAt" | "stageStartedAt" | "completedClips">) {
   const now = Date.now();
   const job: Job = {
     ...init,
@@ -108,32 +43,38 @@ export function createJob(
     completedClips: 0,
   };
   jobs.set(job.id, job);
-  persist();
+  persist(job);
   return job;
 }
 
-export function getJob(id: string) {
-  return jobs.get(id);
+export function getJob(id: string) { return jobs.get(id); }
+
+export async function listJobsForDevice(deviceId: string) {
+  const persisted = await listPersistentJobs(deviceId);
+  for (const job of persisted) jobs.set(job.id, job);
+  return persisted;
 }
 
 export function listRecoverableJobs() {
-  return [...jobs.values()].filter((job) => job.status === "queued" && Boolean(job.sourceUrl));
+  return [...jobs.values()].filter((job) => job.status === "queued" && Boolean(job.sourceUrl || job.uploadId));
 }
 
 export function updateJob(id: string, patch: Partial<Job>) {
   const current = jobs.get(id);
   if (!current) return;
   const stageChanged = patch.status && patch.status !== current.status;
-  jobs.set(id, {
+  const next: Job = {
     ...current,
     ...patch,
     updatedAt: Date.now(),
     stageStartedAt: stageChanged ? Date.now() : current.stageStartedAt,
-  });
-  persist();
+  };
+  jobs.set(id, next);
+  persist(next);
+  return next;
 }
 
-export function requestCancellation(id: string): boolean {
+export function requestCancellation(id: string) {
   const job = jobs.get(id);
   if (!job || ["done", "failed", "cancelled"].includes(job.status)) return false;
   updateJob(id, { status: "cancel_requested" });
@@ -146,4 +87,9 @@ export function throwIfCancelled(id: string) {
     error.name = "JobCancelledError";
     throw error;
   }
+}
+
+export async function deleteJob(id: string) {
+  jobs.delete(id);
+  await deleteJobRow(id);
 }
