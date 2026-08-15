@@ -74,7 +74,7 @@ public class MainActivity extends BridgeActivity {
         String ua = webView.getSettings().getUserAgentString();
         if (ua == null) ua = "";
         if (!ua.contains("ClipForge/")) {
-            webView.getSettings().setUserAgentString(ua + " ClipForge/" + BuildConfig.VERSION_NAME);
+            webView.getSettings().setUserAgentString(ua + " ClipForge/" + appVersion());
         }
         webView.addJavascriptInterface(new ClipForgeNativeBridge(), "ClipForgeNative");
         handleAuthIntent(getIntent());
@@ -92,6 +92,15 @@ public class MainActivity extends BridgeActivity {
         super.onResume();
         configureSystemBars();
         ViewCompat.requestApplyInsets(findViewById(android.R.id.content));
+    }
+
+    private String appVersion() {
+        try {
+            String version = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+            return version == null || version.trim().isEmpty() ? "unknown" : version;
+        } catch (Exception ignored) {
+            return "unknown";
+        }
     }
 
     private void configureSystemBars() {
@@ -177,7 +186,7 @@ public class MainActivity extends BridgeActivity {
     public class ClipForgeNativeBridge {
         @JavascriptInterface
         public String getAppVersion() {
-            return BuildConfig.VERSION_NAME;
+            return appVersion();
         }
 
         @JavascriptInterface
