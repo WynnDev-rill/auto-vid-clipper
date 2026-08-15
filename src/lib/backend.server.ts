@@ -22,8 +22,9 @@ export type BackendJob = {
     thumbnail_url: string;
     duration_s: number;
     transcript?: string;
-    youtube_video_id?: string;
-    youtube_error?: string;
+    score?: number;
+    reason?: string;
+    signals?: string[];
   }>;
   error?: string;
   startedAt?: number;
@@ -51,11 +52,10 @@ export async function createBackendJob(input: {
   uploadKey?: string;
   clipDuration: number;
   clipCount: number;
+  goal?: string;
   userId: string;
   jobId: string;
   accessToken?: string;
-  youtubeAccessToken?: string;
-  youtubeVisibility?: "public" | "unlisted" | "private";
 }): Promise<{ backendJobId: string } | null> {
   const { url, secret, configured } = getBackendConfig();
   if (!configured || !url) return null;
