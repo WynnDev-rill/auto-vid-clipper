@@ -46,11 +46,13 @@ async function authenticate(req: express.Request): Promise<AuthResult | null> {
   }
 }
 
+// Keep the worker backward-compatible with projects created by older APKs.
+// The V2 Create screen itself uses the narrower 15–90s / 5–15 candidate defaults.
 const CreateJobSchema = z.object({
   sourceUrl: z.string().url().optional(),
   uploadKey: z.string().optional(),
-  clipDuration: z.number().int().min(15).max(90),
-  clipCount: z.number().int().min(5).max(15),
+  clipDuration: z.number().int().min(5).max(180),
+  clipCount: z.number().int().min(1).max(20),
   goal: z.string().trim().max(240).optional(),
   userId: z.string().min(1),
   jobId: z.string().min(1),
