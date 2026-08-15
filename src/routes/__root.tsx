@@ -19,6 +19,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1, viewport-fit=cover" },
       { name: "theme-color", content: "#071022" },
+      { name: "application-name", content: "ClipForge" },
       { title: "ClipForge — Find the best moments" },
       { name: "description", content: "Turn long videos into ranked short-form moments, edit the best ones, and export them." },
     ],
