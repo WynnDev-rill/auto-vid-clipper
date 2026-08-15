@@ -7,7 +7,10 @@ export type PersonalAiTest = { provider: string; chatModel?: string; speechModel
 const META_KEY = "clipforge-personal-ai-v4";
 const WEB_KEY = "clipforge-personal-ai-secret-v4";
 const SECRET_NAME = "personal-ai-key";
+const OVH_STT_URL = "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1/audio/transcriptions";
+const OVH_ANON_MAX_BYTES = 10 * 1024 * 1024;
 let puterPromise: Promise<any> | null = null;
+let ovhSpeechCooldownUntil = 0;
 const modelCache = new Map<string, { at: number; chat?: string; speech?: string }>();
 
 function nativeBridge() {
@@ -62,6 +65,30 @@ function normalizeSegments(raw: any, text: string): TranscriptSegment[] {
   const source = raw?.segments ?? raw?.result?.segments ?? raw?.transcription?.segments ?? [];
   if (!Array.isArray(source)) return [];
   return source.map((item: any) => ({ start: Number(item.start ?? item.start_time ?? item.startTime ?? 0), end: Number(item.end ?? item.end_time ?? item.endTime ?? 0), text: String(item.text ?? item.transcript ?? "").trim() })).filter((item) => item.text && Number.isFinite(item.start) && Number.isFinite(item.end) && item.end >= item.start);
+}
+
+async function transcribeOvhAnonymous(source: Blob): Promise<TranscriptResult> {
+  if (Date.now() < ovhSpeechCooldownUntil) throw new Error("OVH anonymous speech is cooling down");
+  if (source.size > OVH_ANON_MAX_BYTES) throw new Error("OVH anonymous speech payload is too large");
+  const ext = source.type.includes("webm") ? "webm" : source.type.includes("wav") ? "wav" : source.type.includes("mpeg") ? "mp3" : "mp4";
+  const form = new FormData();
+  form.append("file", source, `clipforge.${ext}`);
+  form.append("model", "whisper-large-v3");
+  form.append("temperature", "0");
+  form.append("diarize", "false");
+  form.append("timestamp_granularities[]", "segment");
+  form.append("response_format", "verbose_json");
+  try {
+    const response = await fetch(OVH_STT_URL, { method: "POST", headers: { Accept: "application/json" }, body: form });
+    if (response.status === 429) { ovhSpeechCooldownUntil = Date.now() + 35_000; throw new Error("OVH anonymous speech is rate limited"); }
+    if (!response.ok) throw new Error(`OVH anonymous speech failed (${response.status})`);
+    const data = await response.json() as any, text = String(data?.text || "").trim();
+    if (!text) throw new Error("OVH anonymous speech returned no transcript");
+    return { text, segments: normalizeSegments(data, text), provider: "ovh-anonymous:whisper-large-v3" };
+  } catch (error) {
+    if (error instanceof TypeError) ovhSpeechCooldownUntil = Date.now() + 5 * 60_000;
+    throw error;
+  }
 }
 
 function resolveProvider(provider: PersonalProvider, key: string, baseUrl?: string): Exclude<PersonalProvider, "auto"> {
@@ -134,13 +161,17 @@ async function personalTranscribe(source: Blob, forceModels = false): Promise<Tr
 }
 
 export async function transcribeRemote(source: string | Blob): Promise<TranscriptResult> {
+  let blob: Blob | undefined = typeof source === "string" ? undefined : source;
+  if (blob && blob.size <= OVH_ANON_MAX_BYTES) {
+    try { return await transcribeOvhAnonymous(blob); }
+    catch (error) { console.warn("[ai-router] OVH anonymous speech failed", error); }
+  }
   try {
     const puter = await loadPuter(); const raw = await puter.ai.speech2txt(source); const text = String(raw?.text ?? raw?.transcription ?? raw?.result?.text ?? raw?.result ?? (typeof raw === "string" ? raw : ""));
     if (text.trim()) return { text: text.trim(), segments: normalizeSegments(raw, text), provider: "puter" };
   } catch (error) { console.warn("[ai-router] Puter speech failed", error); }
   if (getPersonalAiSettings().hasKey) {
-    let blob: Blob;
-    if (typeof source === "string") { const r = await fetch(source); if (!r.ok) throw new Error("Could not read the video for personal transcription."); blob = await r.blob(); } else blob = source;
+    if (!blob) { const r = await fetch(source as string); if (!r.ok) throw new Error("Could not read the video for personal transcription."); blob = await r.blob(); }
     try { return await personalTranscribe(blob); } catch (first) { console.warn("[ai-router] personal speech first attempt failed", first); return personalTranscribe(blob, true); }
   }
   throw new Error("Remote speech services are temporarily unavailable. Add one optional API key in Settings for emergency fallback, or try again later.");
