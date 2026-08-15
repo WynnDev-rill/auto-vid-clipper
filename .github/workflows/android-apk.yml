@@ -65,11 +65,12 @@ jobs:
           npx cap add android
           npx cap sync android
           node scripts/configure-clipforge-android.mjs
-          grep -q 'com.wynndev.clipforge' android/app/src/main/AndroidManifest.xml
+          test -f android/app/src/main/java/com/wynndev/clipforge/MainActivity.java
+          grep -q 'package com.wynndev.clipforge' android/app/src/main/java/com/wynndev/clipforge/MainActivity.java
           grep -q 'ClipForgeNative' android/app/src/main/java/com/wynndev/clipforge/MainActivity.java
           grep -q 'downloadFile' android/app/src/main/java/com/wynndev/clipforge/MainActivity.java
           grep -q 'getAppVersion' android/app/src/main/java/com/wynndev/clipforge/MainActivity.java
-          grep -q 'setDecorFitsSystemWindows(getWindow(), false)' android/app/src/main/java/com/wynndev/clipforge/MainActivity.java
+          grep -Fq 'setDecorFitsSystemWindows(getWindow(), false)' android/app/src/main/java/com/wynndev/clipforge/MainActivity.java
 
       - name: Restore Gradle caches
         uses: actions/cache@v4
