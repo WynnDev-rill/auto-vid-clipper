@@ -8,7 +8,7 @@ import { extractAudio, probeDuration, renderClip } from "./ffmpeg.js";
 import { scoreHighlights } from "./highlights.js";
 import { getJob, throwIfCancelled, updateJob } from "./store.js";
 import { transcribe } from "./transcribe.js";
-import type { AspectRatio, CaptionStyle, Job, Transcript } from "./types.js";
+import type { AspectRatio, CaptionStyle, Job, Transcript, Word } from "./types.js";
 
 const WORK_DIR = path.resolve(process.env.WORK_DIR || "./.work");
 const PUBLIC_BASE_URL = (process.env.PUBLIC_BASE_URL || "https://auto-vid-clipper.onrender.com").replace(/\/$/, "");
@@ -80,18 +80,23 @@ export async function runPipeline(job: Job) {
   } finally { fs.rmSync(jobDir, { recursive: true, force: true }); }
 }
 
+async function loadTranscript(job: Job, directory: string) {
+  if (!job.transcriptMediaId) throw new Error("Transcript is unavailable for this project");
+  const transcriptPath = path.join(directory, "transcript.json");
+  await materializeMedia(job.transcriptMediaId, transcriptPath);
+  return JSON.parse(fs.readFileSync(transcriptPath, "utf8")) as Transcript;
+}
+
 export async function renderExport(input: { jobId: string; clipOrder: number; trimStart?: number; trimEnd?: number; aspectRatio: AspectRatio; captionStyle: CaptionStyle; captions: boolean; normalizeAudio: boolean; cropMode: "safe" | "fill" }) {
   const job = getJob(input.jobId);
   if (!job) throw new Error("Project not found");
   const clip = job.clips.find((item) => item.order === input.clipOrder);
   if (!clip) throw new Error("Moment not found");
-  if (!job.transcriptMediaId) throw new Error("Transcript is unavailable for this project");
   const exportId = nanoid(10), exportDir = path.join(WORK_DIR, `${job.id}-export-${exportId}`);
   fs.mkdirSync(exportDir, { recursive: true });
   try {
-    const sourceVideo = path.join(exportDir, "source.mp4"), transcriptPath = path.join(exportDir, "transcript.json");
-    await Promise.all([materializeSource(job, sourceVideo), materializeMedia(job.transcriptMediaId, transcriptPath)]);
-    const transcript = JSON.parse(fs.readFileSync(transcriptPath, "utf8")) as Transcript;
+    const sourceVideo = path.join(exportDir, "source.mp4");
+    const [transcript] = await Promise.all([loadTranscript(job, exportDir), materializeSource(job, sourceVideo)]);
     const start = Math.max(0, clip.start_s + Math.max(-5, Math.min(5, input.trimStart ?? 0)));
     const end = Math.max(start + 3, clip.end_s + Math.max(-5, Math.min(5, input.trimEnd ?? 0)));
     const mp4 = path.join(exportDir, "final.mp4"), jpg = path.join(exportDir, "final.jpg");
@@ -100,4 +105,37 @@ export async function renderExport(input: { jobId: string; clipOrder: number; tr
     await storeMediaFile(mediaId, mp4, "video/mp4", `ClipForge-${job.id}-${input.clipOrder + 1}.mp4`);
     return { exportId, url: mediaUrl(mediaId) };
   } finally { fs.rmSync(exportDir, { recursive: true, force: true }); }
+}
+
+function srtTime(seconds: number) {
+  const ms = Math.max(0, Math.round(seconds * 1000));
+  const h = Math.floor(ms / 3_600_000), m = Math.floor((ms % 3_600_000) / 60_000), s = Math.floor((ms % 60_000) / 1000), milli = ms % 1000;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")},${String(milli).padStart(3, "0")}`;
+}
+
+function buildSrt(words: Word[], start: number, end: number) {
+  const inClip = words.filter((word) => word.end > start && word.start < end).map((word) => ({ ...word, start: Math.max(0, word.start - start), end: Math.min(end - start, word.end - start) }));
+  const blocks: string[] = [];
+  for (let i = 0, block = 1; i < inClip.length; i += 7, block++) {
+    const group = inClip.slice(i, i + 7); if (!group.length) continue;
+    const text = group.map((word) => word.word).join(" ").replace(/\s+([,.!?;:])/g, "$1");
+    blocks.push(`${block}\n${srtTime(group[0].start)} --> ${srtTime(group[group.length - 1].end)}\n${text}`);
+  }
+  return blocks.join("\n\n") + "\n";
+}
+
+export async function exportSubtitles(input: { jobId: string; clipOrder: number; trimStart?: number; trimEnd?: number }) {
+  const job = getJob(input.jobId);
+  if (!job) throw new Error("Project not found");
+  const clip = job.clips.find((item) => item.order === input.clipOrder);
+  if (!clip) throw new Error("Moment not found");
+  const directory = path.join(WORK_DIR, `${job.id}-srt-${nanoid(6)}`); fs.mkdirSync(directory, { recursive: true });
+  try {
+    const transcript = await loadTranscript(job, directory);
+    const start = Math.max(0, clip.start_s + Math.max(-5, Math.min(5, input.trimStart ?? 0)));
+    const end = Math.max(start + 3, clip.end_s + Math.max(-5, Math.min(5, input.trimEnd ?? 0)));
+    const mediaId = `srt:${job.id}:${clip.order}:${nanoid(8)}`;
+    await storeMediaBuffer(mediaId, `ClipForge-Moment-${clip.order + 1}.srt`, "application/x-subrip; charset=utf-8", Buffer.from(buildSrt(transcript.words, start, end), "utf8"));
+    return { url: mediaUrl(mediaId) };
+  } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 }
