@@ -8,7 +8,12 @@
   "server": {
     "url": "https://auto-vid-clipper-gw7wpdeon-indonesiafilmku-2721s-projects.vercel.app",
     "cleartext": false,
-    "errorPath": "error.html"
+    "errorPath": "error.html",
+    "allowNavigation": [
+      "auto-vid-clipper-gw7wpdeon-indonesiafilmku-2721s-projects.vercel.app",
+      "auto-vid-clipper-git-feat-4eec35-indonesiafilmku-2721s-projects.vercel.app",
+      "auto-vid-clipper.vercel.app"
+    ]
   },
   "plugins": {
     "App": {
