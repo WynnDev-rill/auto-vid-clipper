@@ -6,13 +6,13 @@
     "adjustMarginsForEdgeToEdge": "force"
   },
   "server": {
-    "url": "https://auto-vid-clipper-gw7wpdeon-indonesiafilmku-2721s-projects.vercel.app",
+    "url": "https://auto-vid-clipper.vercel.app",
     "cleartext": false,
     "errorPath": "error.html",
     "allowNavigation": [
-      "auto-vid-clipper-gw7wpdeon-indonesiafilmku-2721s-projects.vercel.app",
-      "auto-vid-clipper-git-feat-4eec35-indonesiafilmku-2721s-projects.vercel.app",
-      "auto-vid-clipper.vercel.app"
+      "auto-vid-clipper.vercel.app",
+      "auto-vid-clipper-indonesiafilmku-2721s-projects.vercel.app",
+      "auto-vid-clipper-git-main-indonesiafilmku-2721s-projects.vercel.app"
     ]
   },
   "plugins": {
